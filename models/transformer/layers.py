@@ -283,7 +283,7 @@ class Decoder(nn.Module):
         x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
 
         # Run decoder
-        y, _ = self.decoder(inputs)
+        y, word_encoder_outputs, turn_encoder_outputs = self.decoder(inputs)
 
         # Final layer normalization
         y = self.layer_norm(y)
