@@ -11,6 +11,15 @@ from .sublayers import MultiHeadAttention, PositionwiseFeedForward
 from ..normalization import LayerNorm
 
 
+def tile(a, dim, n_tile):
+    init_dim = a.size(dim)
+    repeat_idx = [1] * a.dim()
+    repeat_idx[dim] = n_tile
+    a = a.repeat(*(repeat_idx))
+    order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)]))
+    return torch.index_select(a, dim, order_index)
+
+
 def _gen_bias_mask(max_length):
     """
     Generates bias values (-Inf) to mask future timesteps during attention
@@ -18,7 +27,20 @@ def _gen_bias_mask(max_length):
     np_mask = np.triu(np.full([max_length, max_length], -np.inf), 1)
     torch_mask = torch.from_numpy(np_mask).type(torch.FloatTensor)
 
-    return torch_mask.unsqueeze(0).unsqueeze(1)
+    return torch_mask.unsqueeze(0).unsqueeze(1) # [1, 1, max_length, max_length]
+
+
+def _gen_seq_bias_mask(valid_length_list, max_seq_length):
+    seq_mask = np.full([len(valid_length_list), max_seq_length, max_seq_length], 0)
+    for idx, length in enumerate(valid_length_list):
+        seq_mask[idx, :, length:] = -np.inf
+
+    for idx, length in enumerate(valid_length_list):
+        seq_mask[idx, length:] = -np.inf
+
+    seq_mask = torch.from_numpy(seq_mask).type(torch.FloatTensor) # [num_turns, max_seq_length, max_seq_length]
+
+    return seq_mask.unsqueeze(1) # [num_turns, 1, max_seq_length, max_seq_length]
 
 
 def _gen_timing_signal(length, channels, min_timescale=1.0, max_timescale=1.0e4):
@@ -73,13 +95,24 @@ class EncoderLayer(nn.Module):
         self.layer_norm_ffn = LayerNorm(hidden_size)
 
     def forward(self, inputs):
-        x = inputs
+
+        if len(inputs) == 2:
+            x, src_masks = inputs
+
+            print('[In EncoderLayer]')
+            print('x shape: ', x.shape)
+            print('src_masks shape: ', src_masks.shape)
+        else:
+            x = inputs
+            src_masks = None
+
+        # print('src_masks: ', src_masks)
 
         # Layer Norm
         x_norm = self.layer_norm_mha(x)
 
         # Multi-head
-        y = self.multi_head_attention(x_norm, x_norm, x_norm)
+        y = self.multi_head_attention(x_norm, x_norm, x_norm, src_masks)
 
         # Dropout & Residual
         x = self.dropout(x + y)
@@ -133,14 +166,18 @@ class Encoder(nn.Module):
         self.layer_norm = LayerNorm(hidden_size)
         self.input_dropout = nn.Dropout(input_dropout)
 
-    def forward(self, inputs):
+    def forward(self, inputs, src_masks=None):
 
         # Construct Transformer-Encoder input representation. inputs is the result vectors of glove & pos embeddings.
         x = self.input_dropout(inputs)
         x = self.embedding_proj(x)
         x += self.timing_signal[:, :inputs.shape[1], :].type_as(inputs.data)
 
-        y = self.encoder(x)
+        print('======= In Encoder =====')
+        print('src_masks shape: ', src_masks.shape)
+        print('\n')
+
+        y = self.encoder((x, src_masks))
         y = self.layer_norm(y)
         return y
 
@@ -199,7 +236,7 @@ class DecoderLayer(nn.Module):
         # Layer Normalization for word-level attention
         x_norm = self.layer_norm_mha_word_enc(x)
 
-        print('decoder x_norm shape:', x_norm.shape)
+        # print('decoder x_norm shape:', x_norm.shape)
 
         # Word-level cross-attention
         y = self.multi_head_attention_word(x_norm, word_encoder_outputs, word_encoder_outputs)

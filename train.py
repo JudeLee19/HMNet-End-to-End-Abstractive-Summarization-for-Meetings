@@ -10,6 +10,9 @@ from torch.utils.tensorboard import SummaryWriter
 from data.dataset import AMIDataset
 from models.model import SummarizationModel
 
+from utils.checkpointing import CheckpointManager, load_checkpoint
+
+
 class Summarization(object):
     def __init__(self, hparams):
         self.hparams = hparams
@@ -40,28 +43,91 @@ class Summarization(object):
     def build_model(self):
         # Define model
         self.model = SummarizationModel(self.hparams, self.vocab_word)
+
         # Multi-GPU
+        self.model = self.model.to(self.device)
+
+        # Use Multi-GPUs
+        if -1 not in self.hparams.gpu_ids and len(self.hparams.gpu_ids) > 1:
+            self.model = nn.DataParallel(self.model, self.hparams.gpu_ids)
 
         # Define Loss and Optimizer
+        self.criterion = nn.CrossEntropyLoss()
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.hparams.learning_rate, betas=(self.hparams.optimizer_adam_beta1,
+                                                                                               self.hparams.optimizer_adam_beta2))
 
     def setup_training(self):
-        pass
+        self.save_dirpath = self.hparams.save_dirpath
+        self.summary_writer = SummaryWriter(self.save_dirpath)
+        self.checkpoint_manager = CheckpointManager(self.model, self.optimizer, self.save_dirpath, hparams=self.hparams)
+
+        # If loading from checkpoint, adjust start epoch and load parameters.
+        if self.hparams.load_pthpath == "":
+            self.start_epoch = 1
+        else:
+            # "path/to/checkpoint_xx.pth" -> xx
+            self.start_epoch = int(self.hparams.load_pthpath.split("_")[-1][:-4])
+            self.start_epoch += 1
+            model_state_dict, optimizer_state_dict = load_checkpoint(self.hparams.load_pthpath)
+            if isinstance(self.model, nn.DataParallel):
+                self.model.module.load_state_dict(model_state_dict)
+            else:
+                self.model.load_state_dict(model_state_dict)
+            self.optimizer.load_state_dict(optimizer_state_dict)
+            self.previous_model_path = self.hparams.load_pthpath
+            print("Loaded model from {}".format(self.hparams.load_pthpath))
+
+        print(
+            """
+            # -------------------------------------------------------------------------
+            #   Setup Training Finished
+            # -------------------------------------------------------------------------
+            """
+        )
 
     def train(self):
         self.build_dataloader()
         self.build_model()
 
+        train_begin = datetime.utcnow()  # News
+        global_iteration_step = 0
         for epoch in range(self.hparams.num_epochs):
             tqdm_batch_iterator = tqdm(self.train_dataloader)
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
                 dialogues_ids = data['dialogues_ids']
                 labels_ids = data['labels_ids']
+                src_masks = data['src_masks'][0]
 
+                print('batch_idx: ', batch_idx)
                 print('shape(dialogues_ids): ', dialogues_ids.shape)
                 print('shape(labels_ids): ', labels_ids.shape)
+                print('shape(src_masks): ', src_masks.shape)
                 print('\n')
-                self.model(dialogues_ids, labels_ids)
 
-                break
-            break
+                logits = self.model(inputs=dialogues_ids, targets=labels_ids, src_masks=src_masks) # [batch, tgt_seq_len, vocab_size]
+
+                loss = self.criterion(logits, labels_ids)
+                loss.backward()
+
+                self.optimizer.step()
+                # gradient cliping
+                nn.utils.clip_grad_norm_(self.model.parameters(), self.hparams.max_gradient_norm)
+                self.optimizer.zero_grad()
+
+                global_iteration_step += 1
+                description = "[{}][Epoch: {:3d}][Iter: {:6d}][Loss: {:6f}][lr: {:7f}]".format(
+                    datetime.utcnow() - train_begin,
+                    epoch,
+                    global_iteration_step, loss,
+                    self.optimizer.param_groups[0]['lr'])
+                tqdm_batch_iterator.set_description(description)
+
+            # -------------------------------------------------------------------------
+            #   ON EPOCH END  (checkpointing and validation)
+            # -------------------------------------------------------------------------
+            self.checkpoint_manager.step(epoch)
+            self.previous_model_path = os.path.join(self.checkpoint_manager.ckpt_dirpath, "checkpoint_%d.pth" % (epoch))
+            self._logger.info(self.previous_model_path)
+
+            torch.cuda.empty_cache()

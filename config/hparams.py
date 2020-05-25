@@ -6,9 +6,10 @@ All configurations are set following "End-to-End Abstractive Summarization for M
 PARAMS = defaultdict(
     # Environment
     device='cuda',
-    workers=12,
+    workers=1,
     gpu_ids=[0,1,2,3],
     data_dir='data/',
+    save_dirpath='checkpoints/',
     # Training Hyperparemter
     batch_size=1,
     num_epochs=60,
@@ -26,6 +27,7 @@ PARAMS = defaultdict(
     optimizer_adam_beta1=0.9,
     optimizer_adam_beta2=0.999,
     # Optimizier
-    learning_rate=5e-4
+    learning_rate=5e-4,
+    max_gradient_norm=2
 
 )

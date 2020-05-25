@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+from models.transformer.layers import _gen_seq_bias_mask
 from collections import Counter, namedtuple
 from tqdm import tqdm
 
@@ -80,23 +81,34 @@ class AMIDataset(Dataset):
             token_ids = self.tokens2ids(tokens, self.vocab_word.token2id)
             dialogues_ids.append(token_ids)
 
-        padded_dialogues, dialogues_lens = self.pad_sequence(dialogues_ids)
+        padded_dialogues, dialogues_lens, src_masks = self.pad_sequence(dialogues_ids)
+
+        # print('In dataset.py [_getitem] function')
+        # print('index: ', index)
+        # print('padded_dialogues shape:', padded_dialogues.shape)
+        # print('src_masks shape: ', src_masks.shape)
+        # print('\n')
 
         data = dict()
         data['dialogues'] = dialogues
         data['labels'] = labels
         data['dialogues_ids'] = padded_dialogues
         data['dialogues_lens'] = torch.tensor(dialogues_lens).long()
+        data['src_masks'] = src_masks
         data['labels_ids'] = torch.tensor(labels_ids).long()
         return data
 
     def pad_sequence(self, seqs):
         lens = [len(seq) for seq in seqs]
-        padded_seqs = torch.zeros(len(seqs), max(lens)).long()
+        max_seq_length = max(lens)
+        padded_seqs = torch.zeros(len(seqs), max_seq_length).long()
         for i, seq in enumerate(seqs):
             end_idx = lens[i]
             padded_seqs[i, :end_idx] = torch.LongTensor(seq[:end_idx])
-        return padded_seqs, lens
+
+        src_masks = _gen_seq_bias_mask(lens, max_seq_length)
+
+        return padded_seqs, lens, src_masks
 
     def tokenize(self, sentence):
         return sentence.split()

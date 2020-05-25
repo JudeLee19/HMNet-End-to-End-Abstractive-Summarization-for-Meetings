@@ -67,9 +67,10 @@ class MultiHeadAttention(nn.Module):
         shape = x.shape
         return x.permute(0, 2, 1, 3).contiguous().view(shape[0], shape[2], shape[3]*self.num_heads)
 
-    def forward(self, queries, keys, values):
+    def forward(self, queries, keys, values, src_masks=None):
 
         queries = self.query_linear(queries)
+
         keys = self.key_linear(keys)
         values = self.value_linear(values)
 
@@ -80,16 +81,21 @@ class MultiHeadAttention(nn.Module):
         # scale queries
         queries *= self.query_scale
 
-        logits = torch.matmul(queries, keys.permute(0, 1, 3, 2))
+        logits = torch.matmul(queries, keys.permute(0, 1, 3, 2)) # (turn, num_heads, seq_len,  seq_len)
 
-        # print('queries shape: ', queries.shape)
-        # print('keys.permute(0, 1, 3, 2) shape: ', keys.permute(0, 1, 3, 2).shape)
-        # print('logits shape: ', logits.shape)
-        # print('\n')
+        if src_masks is not None:
+            print('logits shape: ', logits.shape)
+            print('src_mask shape: ', src_masks.shape)
+            print('\n')
+            # print('[Before] logits: ', logits)
+            logits += src_masks
+            # print('[After] logits: ', logits)
 
-        # Add bias to mask future values
+        # Add bias to mask future values (Triangular Masking)
         if self.bias_mask is not None:
+            # print('[Before] logits: ', logits)
             logits += self.bias_mask[:, :, :logits.shape[-2], :logits.shape[-1]].type_as(logits.data)
+            # print('[After] logits: ', logits)
 
         weights = nn.functional.softmax(logits, dim=-1)
         weights = self.dropout(weights)
