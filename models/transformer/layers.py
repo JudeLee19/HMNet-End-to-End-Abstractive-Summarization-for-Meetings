@@ -9,6 +9,7 @@ import numpy as np
 import math
 from .sublayers import MultiHeadAttention, PositionwiseFeedForward
 from ..normalization import LayerNorm
+from collections import defaultdict
 
 
 def tile(a, dim, n_tile):
@@ -27,7 +28,7 @@ def _gen_bias_mask(max_length):
     np_mask = np.triu(np.full([max_length, max_length], -np.inf), 1)
     torch_mask = torch.from_numpy(np_mask).type(torch.FloatTensor)
 
-    return torch_mask.unsqueeze(0).unsqueeze(1) # [1, 1, max_length, max_length]
+    return torch_mask.unsqueeze(0).unsqueeze(1) # [1, num_heads, max_length, max_length]
 
 
 def _gen_seq_bias_mask(valid_length_list, max_seq_length):
@@ -98,10 +99,6 @@ class EncoderLayer(nn.Module):
 
         if len(inputs) == 2:
             x, src_masks = inputs
-
-            print('[In EncoderLayer]')
-            print('x shape: ', x.shape)
-            print('src_masks shape: ', src_masks.shape)
         else:
             x = inputs
             src_masks = None
@@ -173,13 +170,20 @@ class Encoder(nn.Module):
         x = self.embedding_proj(x)
         x += self.timing_signal[:, :inputs.shape[1], :].type_as(inputs.data)
 
-        print('======= In Encoder =====')
-        print('src_masks shape: ', src_masks.shape)
-        print('\n')
+        # print('======= In Encoder =====')
+        # print('src_masks shape: ', src_masks.shape)
+        # print('\n')
 
         y = self.encoder((x, src_masks))
         y = self.layer_norm(y)
         return y
+
+    def process_inputs(self, inputs):
+        print('[process_inputs] inputs type: ', inputs.type())
+        x = self.input_dropout(inputs)
+        x = self.embedding_proj(x)
+        x += self.timing_signal[:, :inputs.shape[1], :].type_as(inputs.data)
+        return x
 
 
 class DecoderLayer(nn.Module):
@@ -207,13 +211,16 @@ class DecoderLayer(nn.Module):
 
         super(DecoderLayer, self).__init__()
         self.multi_head_attention_dec = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
-                                                           hidden_size, num_heads, bias_mask, attention_dropout)
+                                                           hidden_size, num_heads, bias_mask, attention_dropout,
+                                                           attention_type='self-attention')
 
         self.multi_head_attention_word = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
-                                                           hidden_size, num_heads, dropout=attention_dropout)
+                                                           hidden_size, num_heads, dropout=attention_dropout,
+                                                            attention_type='word-level-attention')
 
         self.multi_head_attention_turn = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
-                                                           hidden_size, num_heads, dropout=attention_dropout)
+                                                           hidden_size, num_heads, dropout=attention_dropout,
+                                                            attention_type='turn-level-attention')
 
         self.positionwise_feed_forward = PositionwiseFeedForward(hidden_size, filter_size, hidden_size,
                                                                  layer_config='cc', padding = 'left',
@@ -224,12 +231,13 @@ class DecoderLayer(nn.Module):
         self.layer_norm_mha_turn_enc = LayerNorm(hidden_size)
         self.layer_norm_ffn = LayerNorm(hidden_size)
 
-    def forward(self, inputs):
+    def forward(self, inputs, layer_cache=None):
         decoder_inputs, word_encoder_outputs, turn_encoder_outputs = inputs
         x_norm = self.layer_norm_mha_dec(decoder_inputs)
 
         # Masked Multi-head attention for decoding inputs
-        y = self.multi_head_attention_dec(x_norm, x_norm, x_norm)
+        y = self.multi_head_attention_dec(x_norm, x_norm,
+                                          x_norm, layer_cache=layer_cache)
 
         x = self.dropout(decoder_inputs + y) # [1, tgt_seq_len, 300]
 
@@ -239,7 +247,9 @@ class DecoderLayer(nn.Module):
         # print('decoder x_norm shape:', x_norm.shape)
 
         # Word-level cross-attention
-        y = self.multi_head_attention_word(x_norm, word_encoder_outputs, word_encoder_outputs)
+        y = self.multi_head_attention_word(x_norm, word_encoder_outputs,
+                                           word_encoder_outputs,
+                                           layer_cache=layer_cache)
 
         x = self.dropout(x + y)
 
@@ -247,7 +257,9 @@ class DecoderLayer(nn.Module):
         x_norm = self.layer_norm_mha_turn_enc(x)
 
         # Turn-level cross-attention
-        y = self.multi_head_attention_turn(x_norm, turn_encoder_outputs, turn_encoder_outputs)
+        y = self.multi_head_attention_turn(x_norm, turn_encoder_outputs,
+                                           turn_encoder_outputs,
+                                           layer_cache=layer_cache)
 
         x = self.dropout(x + y)
 
@@ -302,14 +314,16 @@ class Decoder(nn.Module):
                   attention_dropout,
                   relu_dropout)
 
+        self.num_layers = num_layers
         self.embedding_proj = nn.Linear(embedding_size, hidden_size, bias=False)
-        self.decoder = nn.Sequential(*[DecoderLayer(*params) for l in range(num_layers)])
+        self.decoder_layers = nn.Sequential(*[DecoderLayer(*params) for l in range(num_layers)])
 
         self.layer_norm = LayerNorm(hidden_size)
         self.input_dropout = nn.Dropout(input_dropout)
 
-    def forward(self, inputs):
+    def forward(self, inputs, state=None):
         decoder_inputs, word_encoder_outputs, turn_encoder_outputs = inputs
+
         # Add input dropout
         x = self.input_dropout(decoder_inputs)
 
@@ -320,8 +334,68 @@ class Decoder(nn.Module):
         x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
 
         # Run decoder
-        y, word_encoder_outputs, turn_encoder_outputs = self.decoder(inputs)
+        if state is None:
+            y, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers(inputs)
+        else:
+            # utilize state caching only for inference
+            for idx, decoder_layer in enumerate(self.decoder_layers):
+                layer_cache = state.layer_caches[idx]
+                y, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers((y, word_encoder_outputs, turn_encoder_outputs),
+                                                                                    layer_cache)
+
+                state.update_state(idx,
+                                   attention_type='self-attention',
+                                   key_projected=decoder_layer.multi_head_attention_dec.key_projected,
+                                   value_projected=decoder_layer.multi_head_attention_dec.value_projected)
+                state.update_state(idx,
+                                   attention_type='word-level-attention',
+                                   key_projected=decoder_layer.multi_head_attention_word.key_projected,
+                                   value_projected=decoder_layer.multi_head_attention_word.value_projected)
+                state.update_state(idx,
+                                   attention_type='turn-level-attention',
+                                   key_projected=decoder_layer.multi_head_attention_turn.key_projected,
+                                   value_projected=decoder_layer.multi_head_attention_turn.value_projected)
+
 
         # Final layer normalization
         y = self.layer_norm(y)
-        return y
+
+        return y, state
+
+    def process_inputs(self, decoder_inputs):
+        # Add input dropout
+        x = self.input_dropout(decoder_inputs)
+
+        # Project to hidden size
+        x = self.embedding_proj(x)
+
+        # Add timing signal
+        x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
+        return x
+
+
+    def init_decoder_state(self):
+        state = DecoderState()
+        return state
+
+
+class DecoderState(object):
+    def __init__(self):
+        self.previous_inputs = torch.tensor([])
+        self.layer_caches = defaultdict(lambda: {'self-attention': None, 'word-level-attention': None,
+                                                          'turn-level-attention': None})
+
+    def update_state(self, layer_index, attention_type, key_projected, value_projected):
+        self.layer_caches[layer_index][attention_type] = {
+            'key_projected': key_projected,
+            'value_projected': value_projected
+        }
+
+    def beam_update(self, positions):
+        for layer_index in self.layer_caches:
+            for mode in ('self-attention', 'word-level-attention', 'turn-level-attention'):
+                if self.layer_caches[layer_index][mode] is not None:
+                    for projection in self.layer_caches[layer_index][mode]:
+                        cache = self.layer_caches[layer_index][mode][projection]
+                        if cache is not None:
+                            cache.data.copy_(cache.data.index_select(0, positions))

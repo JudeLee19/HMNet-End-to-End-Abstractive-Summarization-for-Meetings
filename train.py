@@ -1,6 +1,5 @@
 import os
 import logging
-
 from datetime import datetime
 from tqdm import tqdm
 import torch
@@ -9,13 +8,14 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from data.dataset import AMIDataset
 from models.model import SummarizationModel
-
 from utils.checkpointing import CheckpointManager, load_checkpoint
+from predictor import Predictor
 
 
 class Summarization(object):
     def __init__(self, hparams):
         self.hparams = hparams
+        self._logger = logging.getLogger(__name__)
         print('self.hparams:', self.hparams)
         self.logger = logging.getLogger(__name__)
         if hparams.device == 'cuda':
@@ -33,6 +33,14 @@ class Summarization(object):
             drop_last=True
         )
         self.vocab_word = self.train_dataset.vocab_word
+
+        self.test_dataset = AMIDataset(self.hparams, type='test', vocab_word=self.vocab_word)
+        self.test_dataloader = DataLoader(
+            self.test_dataset,
+            batch_size=self.hparams.batch_size,
+            num_workers=self.hparams.workers,
+            drop_last=False
+        )
 
     print("""
            # -------------------------------------------------------------------------
@@ -55,6 +63,9 @@ class Summarization(object):
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.hparams.learning_rate, betas=(self.hparams.optimizer_adam_beta1,
                                                                                                self.hparams.optimizer_adam_beta2))
+
+        # Define predictor
+        self.predictor = Predictor(self.hparams, model=self.model, vocabs=self.vocab_word)
 
     def setup_training(self):
         self.save_dirpath = self.hparams.save_dirpath
@@ -88,24 +99,31 @@ class Summarization(object):
     def train(self):
         self.build_dataloader()
         self.build_model()
+        self.setup_training()
 
         train_begin = datetime.utcnow()  # News
         global_iteration_step = 0
         for epoch in range(self.hparams.num_epochs):
+
+            self.evaluate(self.test_dataloader)
+
             tqdm_batch_iterator = tqdm(self.train_dataloader)
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
-                dialogues_ids = data['dialogues_ids']
-                labels_ids = data['labels_ids']
-                src_masks = data['src_masks'][0]
+                dialogues_ids = data['dialogues_ids'].to(self.device)
+                labels_ids = data['labels_ids'].to(self.device) # [batch, tgt_seq_len]
+                src_masks = data['src_masks'].to(self.device)
 
-                print('batch_idx: ', batch_idx)
-                print('shape(dialogues_ids): ', dialogues_ids.shape)
-                print('shape(labels_ids): ', labels_ids.shape)
-                print('shape(src_masks): ', src_masks.shape)
-                print('\n')
+                # print('batch_idx: ', batch_idx)
+                # print('shape(dialogues_ids): ', dialogues_ids.shape)
+                # print('shape(labels_ids): ', labels_ids.shape)
+                # print('shape(src_masks): ', src_masks.shape)
+                # print('\n')
 
-                logits = self.model(inputs=dialogues_ids, targets=labels_ids, src_masks=src_masks) # [batch, tgt_seq_len, vocab_size]
+                logits = self.model(inputs=dialogues_ids, targets=labels_ids,
+                                    src_masks=src_masks) # [batch x tgt_seq_len, vocab_size]
+
+                labels_ids = labels_ids.view(labels_ids.shape[0] * labels_ids.shape[1]) # [batch x tgt_seq_len]
 
                 loss = self.criterion(logits, labels_ids)
                 loss.backward()
@@ -131,3 +149,18 @@ class Summarization(object):
             self._logger.info(self.previous_model_path)
 
             torch.cuda.empty_cache()
+
+            # -------------------------------------------------------------------------
+            #   Evaluation
+            # -------------------------------------------------------------------------
+            # self.evaluate(self.test_dataloader)
+
+    def evaluate(self, test_dataloader):
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(tqdm(test_dataloader)):
+                data = batch
+                dialogues_ids = data['dialogues_ids'].to(self.device)
+                labels_ids = data['labels_ids'].to(self.device)  # [batch, tgt_seq_len]
+                src_masks = data['src_masks'].to(self.device)
+
+                results = self.predictor.predict(dialogues_ids, src_masks)

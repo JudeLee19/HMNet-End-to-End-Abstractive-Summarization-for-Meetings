@@ -7,9 +7,10 @@ PARAMS = defaultdict(
     # Environment
     device='cuda',
     workers=1,
-    gpu_ids=[0,1,2,3],
+    gpu_ids=[0],
     data_dir='data/',
     save_dirpath='checkpoints/',
+    load_pthpath="",
     # Training Hyperparemter
     batch_size=1,
     num_epochs=60,
@@ -19,7 +20,8 @@ PARAMS = defaultdict(
     num_heads=2,
     num_hidden_layers=2,
     hidden_size=300,
-    max_length=400,
+    min_length=50,
+    max_length=800,
     attention_key_channels=0,
     attention_value_channels=0,
     filter_size=128,
@@ -28,6 +30,8 @@ PARAMS = defaultdict(
     optimizer_adam_beta2=0.999,
     # Optimizier
     learning_rate=5e-4,
-    max_gradient_norm=2
+    max_gradient_norm=2,
+    # Decoding
+    beam_size=12
 
 )

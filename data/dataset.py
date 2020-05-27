@@ -4,11 +4,14 @@ from models.transformer.layers import _gen_seq_bias_mask
 from collections import Counter, namedtuple
 from tqdm import tqdm
 
+# For input dialogues
 PAD = 0
 BOS = 1
 EOS = 2
 UNK = 3
+# For target summaries
 BEGIN = 4
+END = 5
 
 
 class AttrDict(dict):
@@ -148,9 +151,11 @@ class AMIDataset(Dataset):
         print("\n===== Building Word Vocab =========")
         vocab = AttrDict()
         vocab.token2id = {'<PAD>': PAD, '<BOS>': BOS, '<EOS>': EOS,
-                          '<UNK>': UNK, '<BEGIN>': BEGIN}
+                          '<UNK>': UNK, '<BEGIN>': BEGIN, '<END>': END}
+        preset_vocab_size = len(vocab.token2id)
+        print('preset_vocab_size: ', preset_vocab_size)
         vocab.token2id.update(
-            {token: _id + 5 for _id, (token, count) in tqdm(enumerate(counter.most_common(max_vocab_size)))})
+            {token: _id + preset_vocab_size for _id, (token, count) in tqdm(enumerate(counter.most_common(max_vocab_size)))})
         vocab.id2token = {v: k for k, v in tqdm(vocab.token2id.items())}
         print('Vocab size: ', len(vocab.token2id))
         print('==========================================')
@@ -159,11 +164,13 @@ class AMIDataset(Dataset):
     def tokens2ids(self, tokens, token2id, is_reference=False):
         seq = []
         if is_reference is False:
-            # Training Corpus
+            # For input dialogues.
             seq.append(BOS)
             seq.extend([token2id.get(token, UNK) for token in tokens])
             seq.append(EOS)
         else:
+            # For target summaries.
             seq.append(BEGIN)
             seq.extend([token2id.get(token, UNK) for token in tokens])
+            seq.append(END)
         return seq

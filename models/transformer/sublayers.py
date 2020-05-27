@@ -8,7 +8,7 @@ import torch.nn as nn
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, input_depth, total_key_depth, total_value_depth, output_depth,
-                 num_heads, bias_mask=None, dropout=0.0):
+                 num_heads, bias_mask=None, dropout=0.0, attention_type=None):
         """
         Parameters:
             input_depth: Size of last dimension of input
@@ -40,6 +40,12 @@ class MultiHeadAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+        self.key_projected = None
+        self.value_projected = None
+        self.attention_type = attention_type
+
+        self.attention = None
+
     def _split_heads(self, x):
         """
         Split x such to add an extra num_heads dimension
@@ -67,12 +73,32 @@ class MultiHeadAttention(nn.Module):
         shape = x.shape
         return x.permute(0, 2, 1, 3).contiguous().view(shape[0], shape[2], shape[3]*self.num_heads)
 
-    def forward(self, queries, keys, values, src_masks=None):
+    def forward(self, queries, keys, values, src_masks=None, layer_cache=None):
 
         queries = self.query_linear(queries)
 
-        keys = self.key_linear(keys)
-        values = self.value_linear(values)
+        if layer_cache is None or layer_cache[self.attention_type] is None:
+            keys = self.key_linear(keys)
+            values = self.value_linear(values)
+        else:
+            # for inference
+            if self.attention_type == 'self-attention':
+                keys = self.key_linear(keys)
+                values = self.value_linear(values)
+
+                keys = torch.cat([keys, layer_cache[self.attention_type]['key_projected']], dim=1) # why inverse?
+                values = torch.cat([values, layer_cache[self.attention_type]['key_projected']], dim=1)
+
+            else:
+                # for word-level or turn-level attention
+                keys = layer_cache[self.attention_type]['key_projected']
+                values = layer_cache[self.attention_type]['value_projected']
+
+            print('================== After Caching ==================')
+            print('quries shape: ', queries.shape)
+            print('keys.shape: ', keys.shape)
+            print('values.shape: ', values.shape)
+            print('===================================================')
 
         queries = self._split_heads(queries) # [batch_size, num_heads, seq_length, depth/num_heads]
         keys = self._split_heads(keys)
@@ -84,12 +110,7 @@ class MultiHeadAttention(nn.Module):
         logits = torch.matmul(queries, keys.permute(0, 1, 3, 2)) # (turn, num_heads, seq_len,  seq_len)
 
         if src_masks is not None:
-            print('logits shape: ', logits.shape)
-            print('src_mask shape: ', src_masks.shape)
-            print('\n')
-            # print('[Before] logits: ', logits)
             logits += src_masks
-            # print('[After] logits: ', logits)
 
         # Add bias to mask future values (Triangular Masking)
         if self.bias_mask is not None:
@@ -98,6 +119,7 @@ class MultiHeadAttention(nn.Module):
             # print('[After] logits: ', logits)
 
         weights = nn.functional.softmax(logits, dim=-1)
+        self.attention = weights
         weights = self.dropout(weights)
 
         contexts = torch.matmul(weights, values)

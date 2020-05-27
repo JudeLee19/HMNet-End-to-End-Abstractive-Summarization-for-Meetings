@@ -72,9 +72,7 @@ class SummarizationModel(nn.Module):
             use_mask=True
         )
 
-        self.softmax = nn.LogSoftmax(dim=-1)
-
-    def forward(self, inputs, targets, src_masks):
+    def forward(self, inputs, targets, src_masks=None):
         """
 
         :param
@@ -86,24 +84,26 @@ class SummarizationModel(nn.Module):
         :return:
         """
 
-        print('======= [In Summarization Model Forward function] =======')
-        print('dialogues_ids shape: ', inputs.shape)
-        print('targets shape: ', targets.shape)
-        print('src_masks shape: ', src_masks.shape)
-        print('=========================================================')
+        src_masks = src_masks.squeeze(0)
+
+        # print('======= [In Summarization Model Forward function] =======')
+        # print('dialogues_ids shape: ', inputs.shape)
+        # print('targets shape: ', targets.shape)
+        # print('src_masks shape: ', src_masks.shape)
+        # print('=========================================================')
 
         inputs = torch.squeeze(inputs, 0) #[num_turns, seq_len]
         inputs_word_emb = self.embedding_word(inputs) # [num_turns, seq_len, 300]
 
         word_level_outputs = self.word_level_encoder(inputs=inputs_word_emb, src_masks=src_masks) # [num_turns, seq_len, 300]
 
-        print('Word-level encoder is done')
+        # print('Word-level encoder is done')
 
         turn_level_inputs = word_level_outputs[:, 0] # [num_turns, 300]
         turn_level_inputs = torch.unsqueeze(turn_level_inputs, 0) # [1, num_turns, 300]
         turn_level_outputs = self.turn_level_encoder(turn_level_inputs) # [1, num_turns, 300]
 
-        print('Turn-level encoder is done')
+        # print('Turn-level encoder is done')
 
         # print('turn_level_outputs shape: ', turn_level_outputs.shape)
 
@@ -113,14 +113,17 @@ class SummarizationModel(nn.Module):
         word_level_shape = word_level_outputs.shape
         word_level_outputs = word_level_outputs.view(word_level_shape[0] * word_level_shape[1], 300)
         word_level_outputs = word_level_outputs.unsqueeze(0)
-        # print('word_level_outputs shape: ', word_level_outputs.shape)
+        # print('[Before decoder input]: word_level_outputs shape: ', word_level_outputs.shape)
 
-        decoder_outputs = self.decoder((targets_word_emb, word_level_outputs, turn_level_outputs)) # [1, tgt_seq_len, 300]
+        decoder_outputs, state = self.decoder((targets_word_emb, word_level_outputs, turn_level_outputs)) # [1, tgt_seq_len, 300]
         # print('decoder_outputs: ', decoder_outputs.shape)
 
         # Reuse the weight of embedding matrix D, to decode v_{k-1} into a probability distribution
-        logitis = torch.matmul(decoder_outputs, self.embedding_word.transpose(0, 1))
+        logits = torch.matmul(decoder_outputs, torch.transpose(self.embedding_word.weight, 0, 1))
 
-        return logitis
+        shape = logits.shape
+        logits = logits.view(shape[0]*shape[1], shape[-1])
+
+        return logits
 
 
