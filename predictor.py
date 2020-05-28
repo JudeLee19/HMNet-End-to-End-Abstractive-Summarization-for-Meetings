@@ -88,7 +88,7 @@ class Predictor(object):
         results["gold_score"] = [0] * self.batch_size
 
         inputs = torch.squeeze(inputs, 0)  # [num_turns, seq_len]
-        inputs_word_emb = self.model.embedding_word(inputs)
+        inputs_word_emb = self.model.embedding_word(inputs) # [1, num_turns, seq_len, 300]
 
         src_masks = src_masks.squeeze(0)
         word_level_outputs = self.model.word_level_encoder(inputs=inputs_word_emb,
@@ -107,7 +107,8 @@ class Predictor(object):
         word_level_memory_beam = word_level_outputs.detach().repeat(self.beam_size, 1, 1)  # [beam_size, num_turns * seq_len, 300]
         turn_level_memory_beam = turn_level_outputs.detach().repeat(self.beam_size, 1, 1)  # [beam_size, num_turns, 300]
 
-        for step in range(self.max_length):
+        # for step in range(self.max_length):
+        for step in range(50):
             print('[Step]: ', step)
             print('alive_seq[:, -1].view(1, -1).transpose(0, 1): ', alive_seq[:, -1].view(1, -1).transpose(0, 1))
             tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
@@ -155,7 +156,7 @@ class Predictor(object):
                         # print('step:', step)
                         # print('i: ', i)
                         # print('trigrams[:-1]: ', trigrams[:-1])
-                        # print('trigram: ', trigram)
+                        print('trigram: ', trigram)
                         # print('\n')
                         if trigram in trigrams[:-1]:
                             fail = True
