@@ -65,7 +65,7 @@ class Summarization(object):
                                                                                                self.hparams.optimizer_adam_beta2))
 
         # Define predictor
-        self.predictor = Predictor(self.hparams, model=None, vocabs=self.vocab_word,
+        self.predictor = Predictor(self.hparams, model=self.model, vocabs=self.vocab_word,
                                    checkpoint=self.hparams.load_pthpath)
 
     def setup_training(self):
@@ -106,7 +106,7 @@ class Summarization(object):
         global_iteration_step = 0
         for epoch in range(self.hparams.num_epochs):
 
-            self.evaluate()
+            # self.evaluate()
             tqdm_batch_iterator = tqdm(self.train_dataloader)
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
@@ -153,7 +153,7 @@ class Summarization(object):
             # -------------------------------------------------------------------------
             #   Evaluation
             # -------------------------------------------------------------------------
-            if epoch >= 5:
+            if epoch >= 20:
                 self.evaluate()
 
     def evaluate(self):
