@@ -36,6 +36,6 @@ PARAMS = defaultdict(
     # Decoding
     beam_size=3,
     n_top=5,
-    block_trigram=True
+    blook_trigram=True
 
 )
