@@ -35,6 +35,7 @@ PARAMS = defaultdict(
     max_gradient_norm=2,
     # Decoding
     beam_size=3,
-    n_top=5
+    n_top=5,
+    block_trigram=True
 
 )
