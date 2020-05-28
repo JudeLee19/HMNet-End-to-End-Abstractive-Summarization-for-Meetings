@@ -11,7 +11,7 @@ PARAMS = defaultdict(
     data_dir='data/',
     save_dirpath='checkpoints/',
     # load_pthpath="",
-    load_pthpath="checkpoints/checkpoint_50.pth",
+    load_pthpath="",
     vocab_word_path='checkpoints/vocab_word',
     # Training Hyperparemter
     batch_size=1,
