@@ -10,7 +10,9 @@ PARAMS = defaultdict(
     gpu_ids=[0],
     data_dir='data/',
     save_dirpath='checkpoints/',
-    load_pthpath="",
+    # load_pthpath="",
+    load_pthpath="checkpoints/checkpoint_6.pth",
+    vocab_word_path='checkpoints/vocab_word',
     # Training Hyperparemter
     batch_size=1,
     num_epochs=60,
@@ -32,6 +34,7 @@ PARAMS = defaultdict(
     learning_rate=5e-4,
     max_gradient_norm=2,
     # Decoding
-    beam_size=12
+    beam_size=3,
+    n_top=5
 
 )

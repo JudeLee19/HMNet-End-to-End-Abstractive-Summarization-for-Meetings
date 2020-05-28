@@ -159,7 +159,7 @@ class Encoder(nn.Module):
         # Pos-tag & entity feature should be added later.
         self.embedding_proj = nn.Linear(embedding_size, hidden_size, bias=False)
 
-        self.encoder = nn.Sequential(*[EncoderLayer(*params) for l in range(num_layers)])
+        self.encoder_layers = nn.Sequential(*[EncoderLayer(*params) for l in range(num_layers)])
         self.layer_norm = LayerNorm(hidden_size)
         self.input_dropout = nn.Dropout(input_dropout)
 
@@ -174,16 +174,9 @@ class Encoder(nn.Module):
         # print('src_masks shape: ', src_masks.shape)
         # print('\n')
 
-        y = self.encoder((x, src_masks))
+        y = self.encoder_layers((x, src_masks))
         y = self.layer_norm(y)
         return y
-
-    def process_inputs(self, inputs):
-        print('[process_inputs] inputs type: ', inputs.type())
-        x = self.input_dropout(inputs)
-        x = self.embedding_proj(x)
-        x += self.timing_signal[:, :inputs.shape[1], :].type_as(inputs.data)
-        return x
 
 
 class DecoderLayer(nn.Module):
@@ -333,15 +326,18 @@ class Decoder(nn.Module):
         # Add timing signal
         x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
 
+        y = x
+
         # Run decoder
         if state is None:
-            y, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers(inputs)
+            y, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers((y, word_encoder_outputs, turn_encoder_outputs))
         else:
             # utilize state caching only for inference
             for idx, decoder_layer in enumerate(self.decoder_layers):
                 layer_cache = state.layer_caches[idx]
-                y, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers((y, word_encoder_outputs, turn_encoder_outputs),
-                                                                                    layer_cache)
+                # print('idx: ', idx, 'layer_cache: ', layer_cache)
+                y, word_encoder_outputs, turn_encoder_outputs = decoder_layer(inputs=(y, word_encoder_outputs, turn_encoder_outputs),
+                                                                                    layer_cache=layer_cache)
 
                 state.update_state(idx,
                                    attention_type='self-attention',
@@ -361,18 +357,6 @@ class Decoder(nn.Module):
         y = self.layer_norm(y)
 
         return y, state
-
-    def process_inputs(self, decoder_inputs):
-        # Add input dropout
-        x = self.input_dropout(decoder_inputs)
-
-        # Project to hidden size
-        x = self.embedding_proj(x)
-
-        # Add timing signal
-        x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
-        return x
-
 
     def init_decoder_state(self):
         state = DecoderState()

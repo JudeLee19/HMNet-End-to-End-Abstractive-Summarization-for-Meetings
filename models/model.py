@@ -92,37 +92,33 @@ class SummarizationModel(nn.Module):
         # print('src_masks shape: ', src_masks.shape)
         # print('=========================================================')
 
-        inputs = torch.squeeze(inputs, 0) #[num_turns, seq_len]
+        # Inputs Self-Attention
+        inputs = torch.squeeze(inputs, 0) # [num_turns, seq_len]
         inputs_word_emb = self.embedding_word(inputs) # [num_turns, seq_len, 300]
 
+
+        # Word-level Cross-Attention
         word_level_outputs = self.word_level_encoder(inputs=inputs_word_emb, src_masks=src_masks) # [num_turns, seq_len, 300]
 
-        # print('Word-level encoder is done')
-
+        # Turn-level Cross-Attention
         turn_level_inputs = word_level_outputs[:, 0] # [num_turns, 300]
         turn_level_inputs = torch.unsqueeze(turn_level_inputs, 0) # [1, num_turns, 300]
         turn_level_outputs = self.turn_level_encoder(turn_level_inputs) # [1, num_turns, 300]
 
-        # print('Turn-level encoder is done')
-
-        # print('turn_level_outputs shape: ', turn_level_outputs.shape)
-
-        # Target inputs
+        # Target Self-Attention
         targets_word_emb = self.embedding_word(targets) # [1, tgt_seq_len, 300]
 
         word_level_shape = word_level_outputs.shape
         word_level_outputs = word_level_outputs.view(word_level_shape[0] * word_level_shape[1], 300)
-        word_level_outputs = word_level_outputs.unsqueeze(0)
-        # print('[Before decoder input]: word_level_outputs shape: ', word_level_outputs.shape)
+        word_level_outputs = word_level_outputs.unsqueeze(0) # [1, num_turns x seq_len, 300]
 
         decoder_outputs, state = self.decoder((targets_word_emb, word_level_outputs, turn_level_outputs)) # [1, tgt_seq_len, 300]
-        # print('decoder_outputs: ', decoder_outputs.shape)
 
         # Reuse the weight of embedding matrix D, to decode v_{k-1} into a probability distribution
         logits = torch.matmul(decoder_outputs, torch.transpose(self.embedding_word.weight, 0, 1))
 
         shape = logits.shape
-        logits = logits.view(shape[0]*shape[1], shape[-1])
+        logits = logits.view(shape[0]*shape[1], shape[-1]) # [beam_size x tgt_seq_len, vocab_size]
 
         return logits
 

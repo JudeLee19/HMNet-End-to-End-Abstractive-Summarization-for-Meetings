@@ -86,19 +86,19 @@ class MultiHeadAttention(nn.Module):
                 keys = self.key_linear(keys)
                 values = self.value_linear(values)
 
-                keys = torch.cat([keys, layer_cache[self.attention_type]['key_projected']], dim=1) # why inverse?
-                values = torch.cat([values, layer_cache[self.attention_type]['key_projected']], dim=1)
+                # print('keys shape: ', keys.shape)
+                # print("layer_cache[self.attention_type]['key_projected'] shape: ", layer_cache[self.attention_type]['key_projected'].shape)
+
+                keys = torch.cat([layer_cache[self.attention_type]['key_projected'], keys], dim=1)
+                values = torch.cat([layer_cache[self.attention_type]['value_projected'], values], dim=1)
 
             else:
-                # for word-level or turn-level attention
+                # for word-level or turn-level attention (in these cases, keys and values are already processed in encoder)
                 keys = layer_cache[self.attention_type]['key_projected']
                 values = layer_cache[self.attention_type]['value_projected']
 
-            print('================== After Caching ==================')
-            print('quries shape: ', queries.shape)
-            print('keys.shape: ', keys.shape)
-            print('values.shape: ', values.shape)
-            print('===================================================')
+        self.key_projected = keys
+        self.value_projected = values
 
         queries = self._split_heads(queries) # [batch_size, num_heads, seq_length, depth/num_heads]
         keys = self._split_heads(keys)
@@ -107,19 +107,29 @@ class MultiHeadAttention(nn.Module):
         # scale queries
         queries *= self.query_scale
 
-        logits = torch.matmul(queries, keys.permute(0, 1, 3, 2)) # (turn, num_heads, seq_len,  seq_len)
+        logits = torch.matmul(queries, keys.permute(0, 1, 3, 2)) # (batch_size, num_heads, queries_seq_len,  keys_seq_len)
 
         if src_masks is not None:
+            # Encoder Self-Attention
             logits += src_masks
 
         # Add bias to mask future values (Triangular Masking)
         if self.bias_mask is not None:
-            # print('[Before] logits: ', logits)
             logits += self.bias_mask[:, :, :logits.shape[-2], :logits.shape[-1]].type_as(logits.data)
-            # print('[After] logits: ', logits)
 
         weights = nn.functional.softmax(logits, dim=-1)
+
         self.attention = weights
+
+        # if self.attention_type == 'turn-level-attention':
+        #     print('========= turn-level-attention =============')
+        #     print('queries shape: ', queries.shape)
+        #     print('keys.shape: ', keys.shape)
+        #     print('logits.shape: ', logits.shape)
+        #     print('self.attention shape: ', self.attention.shape)
+        #     print('\n')
+
+
         weights = self.dropout(weights)
 
         contexts = torch.matmul(weights, values)

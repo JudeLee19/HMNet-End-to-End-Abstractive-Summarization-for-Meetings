@@ -43,9 +43,23 @@ def train_model(args):
     summarization.train()
 
 
+def evaluate_model(args):
+    hparams = PARAMS
+    hparams = collections.namedtuple("HParams", sorted(hparams.keys()))(**hparams)
+    summarization = Summarization(hparams)
+    summarization.evaluate()
+
+
 if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(description="End-to-End Meeting Summarization (PyTorch)")
+    arg_parser.add_argument("--mode", dest="mode", type=str, default="",
+                            help="(train/eval)")
     args = arg_parser.parse_args()
-    train_model(args)
+    mode = args.mode
+
+    if mode == 'train':
+        train_model(args)
+    elif mode == 'eval':
+        evaluate_model(args)
 
 

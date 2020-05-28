@@ -65,7 +65,8 @@ class Summarization(object):
                                                                                                self.hparams.optimizer_adam_beta2))
 
         # Define predictor
-        self.predictor = Predictor(self.hparams, model=self.model, vocabs=self.vocab_word)
+        self.predictor = Predictor(self.hparams, model=None, vocabs=self.vocab_word,
+                                   checkpoint=self.hparams.load_pthpath)
 
     def setup_training(self):
         self.save_dirpath = self.hparams.save_dirpath
@@ -105,8 +106,7 @@ class Summarization(object):
         global_iteration_step = 0
         for epoch in range(self.hparams.num_epochs):
 
-            self.evaluate(self.test_dataloader)
-
+            self.evaluate()
             tqdm_batch_iterator = tqdm(self.train_dataloader)
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
@@ -153,14 +153,15 @@ class Summarization(object):
             # -------------------------------------------------------------------------
             #   Evaluation
             # -------------------------------------------------------------------------
-            # self.evaluate(self.test_dataloader)
+            if epoch >= 5:
+                self.evaluate()
 
-    def evaluate(self, test_dataloader):
+    def evaluate(self):
         with torch.no_grad():
-            for batch_idx, batch in enumerate(tqdm(test_dataloader)):
+            for batch_idx, batch in enumerate(tqdm(self.test_dataloader)):
                 data = batch
                 dialogues_ids = data['dialogues_ids'].to(self.device)
                 labels_ids = data['labels_ids'].to(self.device)  # [batch, tgt_seq_len]
                 src_masks = data['src_masks'].to(self.device)
 
-                results = self.predictor.predict(dialogues_ids, src_masks)
+                summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks)
