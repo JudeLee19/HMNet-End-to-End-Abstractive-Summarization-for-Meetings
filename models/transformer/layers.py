@@ -226,6 +226,9 @@ class DecoderLayer(nn.Module):
 
     def forward(self, inputs, layer_cache=None):
         decoder_inputs, word_encoder_outputs, turn_encoder_outputs = inputs
+
+        # 여기서 decoder_inputs에 prev-targets-inputs 붙여줘야함!!
+
         x_norm = self.layer_norm_mha_dec(decoder_inputs)
 
         # Masked Multi-head attention for decoding inputs
@@ -326,12 +329,12 @@ class Decoder(nn.Module):
         # Add timing signal
         x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
 
-        y = x
-
         # Run decoder
         if state is None:
+            y = x
             y, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers((y, word_encoder_outputs, turn_encoder_outputs))
         else:
+            y = x
             # utilize state caching only for inference
             for idx, decoder_layer in enumerate(self.decoder_layers):
                 layer_cache = state.layer_caches[idx]
@@ -352,7 +355,6 @@ class Decoder(nn.Module):
                                    key_projected=decoder_layer.multi_head_attention_turn.key_projected,
                                    value_projected=decoder_layer.multi_head_attention_turn.value_projected)
 
-
         # Final layer normalization
         y = self.layer_norm(y)
 
@@ -365,11 +367,13 @@ class Decoder(nn.Module):
 
 class DecoderState(object):
     def __init__(self):
-        self.previous_inputs = torch.tensor([])
+        self.previous_input = None
+        self.previous_layer_inputs = None
         self.layer_caches = defaultdict(lambda: {'self-attention': None, 'word-level-attention': None,
                                                           'turn-level-attention': None})
 
     def update_state(self, layer_index, attention_type, key_projected, value_projected):
+
         self.layer_caches[layer_index][attention_type] = {
             'key_projected': key_projected,
             'value_projected': value_projected

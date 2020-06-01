@@ -93,7 +93,7 @@ class SummarizationModel(nn.Module):
         # print('=========================================================')
 
         # Inputs Self-Attention
-        inputs = torch.squeeze(inputs, 0) # [num_turns, seq_len]
+        inputs = torch.squeeze(inputs, 0) # [1, num_turns, seq_len]
         inputs_word_emb = self.embedding_word(inputs) # [num_turns, seq_len, 300]
 
 

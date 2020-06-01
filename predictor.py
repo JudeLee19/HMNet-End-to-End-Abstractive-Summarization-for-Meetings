@@ -52,6 +52,10 @@ class Predictor(object):
     def generator(self, decoder_outputs):
         # Reuse the weight of embedding matrix D, to decode v_{k-1} into a probability distribution
         logits = torch.matmul(decoder_outputs, torch.transpose(self.model.embedding_word.weight, 0, 1))
+
+        shape = logits.shape
+        logits = logits.view(shape[0] * shape[1], shape[-1])  # [beam_size x tgt_seq_len, vocab_size]
+
         softmax = nn.LogSoftmax(dim=-1)
         probs = softmax(logits)
         return logits, probs
@@ -61,7 +65,16 @@ class Predictor(object):
         summary = ' '.join(tokens)
         return summary
 
-    def inference(self, inputs, src_masks):
+    def get_summaries_from_logits(self, logits):
+        # logits : [batch x tgt_seq_len, vocab_size]
+        softmax = nn.LogSoftmax(dim=-1)
+        probs = softmax(logits)
+        max_indices = torch.argmax(probs, dim=1)
+        tokens = [self.vocab_word.id2token[idx.item()] for idx in max_indices]
+        summary = ' '.join(tokens)
+        return summary
+
+    def inference(self, inputs, src_masks, labels_ids=None):
 
         # Give full probability to the first beam on the first step.
         topk_log_probs = (
@@ -72,8 +85,10 @@ class Predictor(object):
             self.start_token_id,
             dtype=torch.long,
             device=self.device)
+
         batch_offset = torch.arange(
             self.batch_size, dtype=torch.long, device=self.device)
+
         beam_offset = torch.arange(
             0,
             self.batch_size * self.beam_size,
@@ -87,7 +102,8 @@ class Predictor(object):
         results["scores"] = [[] for _ in range(self.batch_size)]  # noqa: F812
         results["gold_score"] = [0] * self.batch_size
 
-        inputs = torch.squeeze(inputs, 0)  # [num_turns, seq_len]
+        # construct inputs
+        inputs = torch.squeeze(inputs, 0)  # [1, num_turns, seq_len]
         inputs_word_emb = self.model.embedding_word(inputs) # [1, num_turns, seq_len, 300]
 
         src_masks = src_masks.squeeze(0)
@@ -107,11 +123,19 @@ class Predictor(object):
         word_level_memory_beam = word_level_outputs.detach().repeat(self.beam_size, 1, 1)  # [beam_size, num_turns * seq_len, 300]
         turn_level_memory_beam = turn_level_outputs.detach().repeat(self.beam_size, 1, 1)  # [beam_size, num_turns, 300]
 
+        if labels_ids is not None:
+            labels_ids = labels_ids.detach().repeat(self.beam_size, 1)
+
         # for step in range(self.max_length):
-        for step in range(50):
+        for step in range(179):
             print('[Step]: ', step)
-            print('alive_seq[:, -1].view(1, -1).transpose(0, 1): ', alive_seq[:, -1].view(1, -1).transpose(0, 1))
-            tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
+            # tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
+
+            # Ground-truth 입력으로 바꿔봄
+            tgt_inputs = labels_ids[:, step].view(1, -1).transpose(0, 1)
+
+            print(tgt_inputs)
+
             tgt_word_emb = self.model.embedding_word(tgt_inputs)
 
             decoder_outputs, decoder_state = self.model.decoder(
@@ -119,17 +143,14 @@ class Predictor(object):
                 state=decoder_state)
 
             logits, log_probs = self.generator(decoder_outputs)  # logits: [beam_size, tgt_seq_len==1, vocab_size]
+
+            print('max_token: ', self.get_summaries_from_logits(logits))
+
             log_probs = log_probs.squeeze(1) # [beam_size, vocab_size]
             vocab_size = log_probs.size(1)
 
-            max_token = torch.argmax(log_probs[0])
-            print('arg_max: ', max_token, 'Max_token: ', self.vocab_word.id2token[max_token.item()])
-
             if step < self.min_length:
                 log_probs[:, self.end_token_id] = -1e20
-
-            # print('log_probs.shape: ', log_probs.shape)
-            # print('topk_log_probs.view(-1).unsqueeze(1) shape: ', topk_log_probs.view(-1).unsqueeze(1).shape)
 
             # Multiply probs by the beam probability.
             log_probs += topk_log_probs.view(-1).unsqueeze(1)
@@ -154,15 +175,13 @@ class Predictor(object):
                         trigrams = [(words[i - 1], words[i], words[i + 1]) for i in range(1, len(words) - 1)]
                         trigram = tuple(trigrams[-1])
                         # print('step:', step)
-                        # print('i: ', i)
                         # print('trigrams[:-1]: ', trigrams[:-1])
-                        print('trigram: ', trigram)
+                        # print('trigram: ', trigram)
                         # print('\n')
                         if trigram in trigrams[:-1]:
                             fail = True
                         if fail:
                             curr_scores[i] = -10e20
-
 
             curr_scores = curr_scores.reshape(-1, self.beam_size * vocab_size)
             topk_scores, topk_ids = curr_scores.topk(self.beam_size, dim=-1)
@@ -173,8 +192,6 @@ class Predictor(object):
             # Resolve beam origin and true word ids.
             topk_beam_index = topk_ids.div(vocab_size)
             topk_ids = topk_ids.fmod(vocab_size)
-
-            print('topk_ids: ', topk_ids)
 
             # Map beam_index to batch_index in the flat representation.
             batch_index = (
@@ -187,8 +204,12 @@ class Predictor(object):
                 [alive_seq.index_select(0, select_indices),
                  topk_ids.view(-1, 1)], -1)
 
+            # print('alive_seq: ', alive_seq)
+
             is_finished = topk_ids.eq(self.end_token_id)
-            if step + 1 == self.max_length:
+
+            # if step + 1 == self.max_length:
+            if step + 1 == 179:
                 is_finished.fill_(1)
             end_condition = is_finished[:, 0].eq(1)
 
@@ -235,79 +256,5 @@ class Predictor(object):
         preds = results['predictions'][0][0]
         summary = self.get_summaries(preds)
         print(summary)
-
-    # def inference(self, inputs, src_masks):
-    #     inputs = torch.squeeze(inputs, 0)  # [num_turns, seq_len]
-    #
-    #     # print('inputs shape: ', inputs.shape)
-    #
-    #     inputs_word_emb = self.model.embedding_word(inputs)
-    #
-    #     src_masks = src_masks.squeeze(0)
-    #     word_level_outputs = self.model.word_level_encoder(inputs=inputs_word_emb,
-    #                                                  src_masks=src_masks)  # [num_turns, seq_len, 300]
-    #
-    #     turn_level_inputs = word_level_outputs[:, 0]  # [num_turns, 300]
-    #     turn_level_inputs = torch.unsqueeze(turn_level_inputs, 0)  # [1, num_turns, 300]
-    #     turn_level_outputs = self.model.turn_level_encoder(turn_level_inputs)  # [1, num_turns, 300]
-    #
-    #     word_level_shape = word_level_outputs.shape
-    #     word_level_outputs = word_level_outputs.view(word_level_shape[0] * word_level_shape[1], 300)
-    #     word_level_outputs = word_level_outputs.unsqueeze(0) # [1, num_turns * seq_len, 300]
-    #
-    #     decoder_state = self.model.decoder.init_decoder_state()
-    #
-    #     word_level_memory_beam = word_level_outputs.detach().repeat(self.beam_size, 1, 1) # [beam_size, num_turns * seq_len, 300]
-    #     turn_level_memory_beam = turn_level_outputs.detach().repeat(self.beam_size, 1, 1) # [beam_size, num_turns, 300]
-    #
-    #     beam = BeamSearch(self.hparams, self.vocab_word, n_top=self.hparams.n_top)
-    #
-    #     for _ in range(self.max_length):
-    #         tgt_inputs = beam.get_current_state().unsqueeze(1) # (beam_size, tgt_seq_len==1)
-    #         tgt_inputs = tgt_inputs.to(self.device)
-    #         tgt_word_emb = self.model.embedding_word(tgt_inputs)
-    #         decoder_outputs, decoder_state = self.model.decoder(inputs=(tgt_word_emb, word_level_memory_beam, turn_level_memory_beam),
-    #                                                             state=decoder_state)
-    #
-    #         logits, probs = self.generator(decoder_outputs) # logits: [beam_size, 1, vocab_size]
-    #         attention = self.model.decoder.decoder_layers[-1].multi_head_attention_turn.attention # [beam_size, num_heads, tgt_seq_len==1, num_turns]
-    #
-    #         # remove dimension of num_heads and reshape to (tgt_seq_len, beam_size, num_turns)
-    #
-    #         beam.advance(logits.squeeze(1), attention)
-    #         # beam.advance(probs.squeeze(1), attention)
-    #
-    #         beam_current_origin = beam.get_current_origin()  # (beam_size, )
-    #         decoder_state.beam_update(beam_current_origin)
-    #
-    #         if beam.is_finish():
-    #             break
-    #
-    #     scores, ks = beam.sort_finished(minimum=self.hparams.n_top)
-    #     hypothesises = []
-    #     for i, (times, k) in enumerate(ks[:self.hparams.n_top]):
-    #         hypothesis, attention = beam.get_hypothesis(times, k)
-    #         hypothesises.append(hypothesis)
-    #
-    #     print('hypothesises: ', hypothesises[0])
-    #
-    #     # hypothesises = [[token.item() for token in h] for h in hypothesises]
-    #     summaries = [self.get_summaries(hypothesis) for hypothesis in hypothesises]
-    #     summaries = list(reversed(summaries))
-    #     # print("summaries: ", summaries)
-
-
-    # def evaluate(self, test_dataloader):
-    #     with torch.no_grad():
-    #         for batch_idx, batch in enumerate(tqdm(test_dataloader)):
-    #             data = batch
-    #             dialogues_ids = data['dialogues_ids'].to(self.device)
-    #             labels_ids = data['labels_ids'].to(self.device)  # [batch, tgt_seq_len]
-    #             src_masks = data['src_masks'].to(self.device)
-    #
-    #             # Beam-search starts with <BEGIN> token
-    #
-    #
-    #             # Block trigram
 
 

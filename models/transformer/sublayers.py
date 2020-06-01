@@ -76,33 +76,36 @@ class MultiHeadAttention(nn.Module):
     def forward(self, queries, keys, values, src_masks=None, layer_cache=None):
 
         queries = self.query_linear(queries)
+        queries = self._split_heads(queries) # [batch_size, num_heads, seq_length, depth/num_heads]
 
-        if layer_cache is None or layer_cache[self.attention_type] is None:
-            keys = self.key_linear(keys)
-            values = self.value_linear(values)
-        else:
+        if (layer_cache is not None) and (layer_cache[self.attention_type] is not None):
             # for inference
             if self.attention_type == 'self-attention':
+
                 keys = self.key_linear(keys)
                 values = self.value_linear(values)
 
-                # print('keys shape: ', keys.shape)
-                # print("layer_cache[self.attention_type]['key_projected'] shape: ", layer_cache[self.attention_type]['key_projected'].shape)
+                keys = self._split_heads(keys)
+                values = self._split_heads(values)
 
-                keys = torch.cat([layer_cache[self.attention_type]['key_projected'], keys], dim=1)
-                values = torch.cat([layer_cache[self.attention_type]['value_projected'], values], dim=1)
-
+                keys = torch.cat([layer_cache[self.attention_type]['key_projected'], keys], dim=2)
+                values = torch.cat([layer_cache[self.attention_type]['value_projected'], values], dim=2)
             else:
                 # for word-level or turn-level attention (in these cases, keys and values are already processed in encoder)
                 keys = layer_cache[self.attention_type]['key_projected']
                 values = layer_cache[self.attention_type]['value_projected']
+        else:
+            keys = self.key_linear(keys)
+            values = self.value_linear(values)
+            keys = self._split_heads(keys)
+            values = self._split_heads(values)
+
+        # if self.attention_type == 'self-attention':
+        #     print('keys shape: ', keys.shape)
+        #     print('values shape: ', values.shape)
 
         self.key_projected = keys
         self.value_projected = values
-
-        queries = self._split_heads(queries) # [batch_size, num_heads, seq_length, depth/num_heads]
-        keys = self._split_heads(keys)
-        values = self._split_heads(values)
 
         # scale queries
         queries *= self.query_scale
@@ -128,7 +131,6 @@ class MultiHeadAttention(nn.Module):
         #     print('logits.shape: ', logits.shape)
         #     print('self.attention shape: ', self.attention.shape)
         #     print('\n')
-
 
         weights = self.dropout(weights)
 

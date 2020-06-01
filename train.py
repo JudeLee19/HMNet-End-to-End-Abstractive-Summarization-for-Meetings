@@ -106,22 +106,19 @@ class Summarization(object):
         global_iteration_step = 0
         for epoch in range(self.hparams.num_epochs):
 
-            # self.evaluate()
+            self.evaluate()
             tqdm_batch_iterator = tqdm(self.train_dataloader)
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
                 dialogues_ids = data['dialogues_ids'].to(self.device)
-                labels_ids = data['labels_ids'].to(self.device) # [batch, tgt_seq_len]
+                labels_ids = data['labels_ids'].to(self.device) # [batch==1, tgt_seq_len]
                 src_masks = data['src_masks'].to(self.device)
-
-                # print('batch_idx: ', batch_idx)
-                # print('shape(dialogues_ids): ', dialogues_ids.shape)
-                # print('shape(labels_ids): ', labels_ids.shape)
-                # print('shape(src_masks): ', src_masks.shape)
-                # print('\n')
 
                 logits = self.model(inputs=dialogues_ids, targets=labels_ids,
                                     src_masks=src_masks) # [batch x tgt_seq_len, vocab_size]
+
+                # print('정답: ', self.predictor.get_summaries(labels_ids[0]))
+                # print('예측: ', self.predictor.get_summaries_from_logits(logits))
 
                 labels_ids = labels_ids.view(labels_ids.shape[0] * labels_ids.shape[1]) # [batch x tgt_seq_len]
 
@@ -153,7 +150,7 @@ class Summarization(object):
             # -------------------------------------------------------------------------
             #   Evaluation
             # -------------------------------------------------------------------------
-            if epoch >= 20:
+            if epoch >= 10:
                 self.evaluate()
 
     def evaluate(self):
@@ -164,4 +161,8 @@ class Summarization(object):
                 labels_ids = data['labels_ids'].to(self.device)  # [batch, tgt_seq_len]
                 src_masks = data['src_masks'].to(self.device)
 
-                summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks)
+                print('labels_ids shape: ', labels_ids.shape)
+                print('정답: ', self.predictor.get_summaries(labels_ids[0]))
+                summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks, labels_ids=labels_ids)
+
+                break
