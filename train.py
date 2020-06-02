@@ -104,11 +104,10 @@ class Summarization(object):
                                    checkpoint=self.hparams.load_pthpath)
 
     def train(self):
-
-        self.model.train()
         train_begin = datetime.utcnow()  # News
         global_iteration_step = 0
         for epoch in range(self.hparams.num_epochs):
+            self.model.train()
             tqdm_batch_iterator = tqdm(self.train_dataloader)
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
