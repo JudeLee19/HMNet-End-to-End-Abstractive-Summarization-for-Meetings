@@ -23,6 +23,11 @@ class Summarization(object):
         else:
             self.device = torch.device('cpu')
 
+        self.build_dataloader()
+        self.build_model()
+        self.setup_training()
+        self.build_eval_model()
+
     def build_dataloader(self):
         self.train_dataset = AMIDataset(self.hparams, type='train')
         self.train_dataloader = DataLoader(
@@ -64,10 +69,6 @@ class Summarization(object):
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.hparams.learning_rate, betas=(self.hparams.optimizer_adam_beta1,
                                                                                                self.hparams.optimizer_adam_beta2))
 
-        # Define predictor
-        self.predictor = Predictor(self.hparams, model=self.model, vocabs=self.vocab_word,
-                                   checkpoint=self.hparams.load_pthpath)
-
     def setup_training(self):
         self.save_dirpath = self.hparams.save_dirpath
         self.summary_writer = SummaryWriter(self.save_dirpath)
@@ -97,16 +98,17 @@ class Summarization(object):
             """
         )
 
-    def train(self):
-        self.build_dataloader()
-        self.build_model()
-        self.setup_training()
+    def build_eval_model(self):
+        # Define predictor
+        self.predictor = Predictor(self.hparams, model=self.model, vocabs=self.vocab_word,
+                                   checkpoint=self.hparams.load_pthpath)
 
+    def train(self):
+
+        self.model.train()
         train_begin = datetime.utcnow()  # News
         global_iteration_step = 0
         for epoch in range(self.hparams.num_epochs):
-
-            self.evaluate()
             tqdm_batch_iterator = tqdm(self.train_dataloader)
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
@@ -150,10 +152,11 @@ class Summarization(object):
             # -------------------------------------------------------------------------
             #   Evaluation
             # -------------------------------------------------------------------------
-            if epoch >= 10:
+            if epoch >= 30:
                 self.evaluate()
 
     def evaluate(self):
+
         with torch.no_grad():
             for batch_idx, batch in enumerate(tqdm(self.test_dataloader)):
                 data = batch
@@ -163,6 +166,6 @@ class Summarization(object):
 
                 print('labels_ids shape: ', labels_ids.shape)
                 print('정답: ', self.predictor.get_summaries(labels_ids[0]))
-                summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks, labels_ids=labels_ids)
 
+                summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks, labels_ids=labels_ids)
                 break

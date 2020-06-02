@@ -75,7 +75,6 @@ class Predictor(object):
         return summary
 
     def inference(self, inputs, src_masks, labels_ids=None):
-
         # Give full probability to the first beam on the first step.
         topk_log_probs = (
             torch.tensor([0.0] + [float("-inf")] * (self.beam_size - 1),
@@ -127,24 +126,26 @@ class Predictor(object):
             labels_ids = labels_ids.detach().repeat(self.beam_size, 1)
 
         # for step in range(self.max_length):
-        for step in range(179):
+        for step in range(50):
             print('[Step]: ', step)
-            # tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
+            tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
 
             # Ground-truth 입력으로 바꿔봄
-            tgt_inputs = labels_ids[:, step].view(1, -1).transpose(0, 1)
+            # tgt_inputs = labels_ids[:, step].view(1, -1).transpose(0, 1)
 
-            print(tgt_inputs)
+            tgt_word_emb = self.model.embedding_word(tgt_inputs) # (beam_size, tgt_seq_len==1, 300)
 
-            tgt_word_emb = self.model.embedding_word(tgt_inputs)
+            print('tgt_inputs: ', tgt_inputs)
+            print('입력_token: ', self.get_summaries(tgt_inputs))
 
             decoder_outputs, decoder_state = self.model.decoder(
                 inputs=(tgt_word_emb, word_level_memory_beam, turn_level_memory_beam),
-                state=decoder_state)
+                state=decoder_state, step=step)
 
             logits, log_probs = self.generator(decoder_outputs)  # logits: [beam_size, tgt_seq_len==1, vocab_size]
 
-            print('max_token: ', self.get_summaries_from_logits(logits))
+            print('max_token(from logits): ', self.get_summaries_from_logits(logits))
+            print('\n')
 
             log_probs = log_probs.squeeze(1) # [beam_size, vocab_size]
             vocab_size = log_probs.size(1)
@@ -174,14 +175,10 @@ class Predictor(object):
                             continue
                         trigrams = [(words[i - 1], words[i], words[i + 1]) for i in range(1, len(words) - 1)]
                         trigram = tuple(trigrams[-1])
-                        # print('step:', step)
-                        # print('trigrams[:-1]: ', trigrams[:-1])
-                        # print('trigram: ', trigram)
-                        # print('\n')
                         if trigram in trigrams[:-1]:
                             fail = True
                         if fail:
-                            curr_scores[i] = -10e20
+                            curr_scores[i] = -1e20
 
             curr_scores = curr_scores.reshape(-1, self.beam_size * vocab_size)
             topk_scores, topk_ids = curr_scores.topk(self.beam_size, dim=-1)
@@ -204,12 +201,9 @@ class Predictor(object):
                 [alive_seq.index_select(0, select_indices),
                  topk_ids.view(-1, 1)], -1)
 
-            # print('alive_seq: ', alive_seq)
-
             is_finished = topk_ids.eq(self.end_token_id)
 
-            # if step + 1 == self.max_length:
-            if step + 1 == 179:
+            if step + 1 == self.max_length:
                 is_finished.fill_(1)
             end_condition = is_finished[:, 0].eq(1)
 

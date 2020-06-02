@@ -100,10 +100,6 @@ class MultiHeadAttention(nn.Module):
             keys = self._split_heads(keys)
             values = self._split_heads(values)
 
-        # if self.attention_type == 'self-attention':
-        #     print('keys shape: ', keys.shape)
-        #     print('values shape: ', values.shape)
-
         self.key_projected = keys
         self.value_projected = values
 

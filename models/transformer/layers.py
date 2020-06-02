@@ -63,7 +63,6 @@ def _gen_timing_signal(length, channels, min_timescale=1.0, max_timescale=1.0e4)
     signal = np.pad(signal, [[0, 0], [0, channels % 2]],
                     'constant', constant_values=[0.0, 0.0])
     signal = signal.reshape([1, length, channels])
-
     return torch.from_numpy(signal).type(torch.FloatTensor)
 
 
@@ -170,6 +169,7 @@ class Encoder(nn.Module):
         x = self.embedding_proj(x)
         x += self.timing_signal[:, :inputs.shape[1], :].type_as(inputs.data)
 
+
         # print('======= In Encoder =====')
         # print('src_masks shape: ', src_masks.shape)
         # print('\n')
@@ -208,11 +208,11 @@ class DecoderLayer(nn.Module):
                                                            attention_type='self-attention')
 
         self.multi_head_attention_word = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
-                                                           hidden_size, num_heads, dropout=attention_dropout,
+                                                           hidden_size, num_heads, None, dropout=attention_dropout,
                                                             attention_type='word-level-attention')
 
         self.multi_head_attention_turn = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
-                                                           hidden_size, num_heads, dropout=attention_dropout,
+                                                           hidden_size, num_heads, None, dropout=attention_dropout,
                                                             attention_type='turn-level-attention')
 
         self.positionwise_feed_forward = PositionwiseFeedForward(hidden_size, filter_size, hidden_size,
@@ -239,8 +239,6 @@ class DecoderLayer(nn.Module):
 
         # Layer Normalization for word-level attention
         x_norm = self.layer_norm_mha_word_enc(x)
-
-        # print('decoder x_norm shape:', x_norm.shape)
 
         # Word-level cross-attention
         y = self.multi_head_attention_word(x_norm, word_encoder_outputs,
@@ -298,7 +296,7 @@ class Decoder(nn.Module):
 
         super(Decoder, self).__init__()
 
-        self.timing_signal = _gen_timing_signal(max_length, hidden_size)
+        self.timing_signal = _gen_timing_signal(max_length, hidden_size) # [1, max_len, 300]
 
         params = (hidden_size,
                   total_key_depth or hidden_size,
@@ -317,7 +315,7 @@ class Decoder(nn.Module):
         self.layer_norm = LayerNorm(hidden_size)
         self.input_dropout = nn.Dropout(input_dropout)
 
-    def forward(self, inputs, state=None):
+    def forward(self, inputs, state=None, step=None):
         decoder_inputs, word_encoder_outputs, turn_encoder_outputs = inputs
 
         # Add input dropout
@@ -326,21 +324,24 @@ class Decoder(nn.Module):
         # Project to hidden size
         x = self.embedding_proj(x)
 
-        # Add timing signal
-        x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
+        # Add timing signal (training)
+        if step is None:
+            x += self.timing_signal[:, :decoder_inputs.shape[1], :].type_as(decoder_inputs.data)
+        else:
+            x += self.timing_signal[:, step, :].type_as(decoder_inputs.data)
 
+        output = x
         # Run decoder
         if state is None:
-            y = x
-            y, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers((y, word_encoder_outputs, turn_encoder_outputs))
+            # y = x
+            output, word_encoder_outputs, turn_encoder_outputs = self.decoder_layers((output, word_encoder_outputs, turn_encoder_outputs))
         else:
-            y = x
+            # y = x
             # utilize state caching only for inference
             for idx, decoder_layer in enumerate(self.decoder_layers):
                 layer_cache = state.layer_caches[idx]
-                # print('idx: ', idx, 'layer_cache: ', layer_cache)
-                y, word_encoder_outputs, turn_encoder_outputs = decoder_layer(inputs=(y, word_encoder_outputs, turn_encoder_outputs),
-                                                                                    layer_cache=layer_cache)
+                output, word_encoder_outputs, turn_encoder_outputs = decoder_layer(inputs=(output, word_encoder_outputs, turn_encoder_outputs),
+                                                                                  layer_cache=layer_cache)
 
                 state.update_state(idx,
                                    attention_type='self-attention',
@@ -356,7 +357,7 @@ class Decoder(nn.Module):
                                    value_projected=decoder_layer.multi_head_attention_turn.value_projected)
 
         # Final layer normalization
-        y = self.layer_norm(y)
+        y = self.layer_norm(output)
 
         return y, state
 

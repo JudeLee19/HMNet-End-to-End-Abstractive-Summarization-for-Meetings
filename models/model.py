@@ -97,10 +97,10 @@ class SummarizationModel(nn.Module):
         inputs_word_emb = self.embedding_word(inputs) # [num_turns, seq_len, 300]
 
 
-        # Word-level Cross-Attention
+        # Word-level Attention
         word_level_outputs = self.word_level_encoder(inputs=inputs_word_emb, src_masks=src_masks) # [num_turns, seq_len, 300]
 
-        # Turn-level Cross-Attention
+        # Turn-level Attention
         turn_level_inputs = word_level_outputs[:, 0] # [num_turns, 300]
         turn_level_inputs = torch.unsqueeze(turn_level_inputs, 0) # [1, num_turns, 300]
         turn_level_outputs = self.turn_level_encoder(turn_level_inputs) # [1, num_turns, 300]
