@@ -17,11 +17,12 @@ class SummarizationModel(nn.Module):
 
         self.vocab_size = len(self.vocab_word.token2id)
         self.embedding_word = nn.Embedding(self.vocab_size, hparams.embedding_size_word)
-        # Load glove embeddings from spacy library
-        nlp = spacy.load('en_core_web_lg')
-        glove_embedding = load_spacy_glove_embedding(nlp, self.vocab_word)
-        self.embedding_word.weight.data.copy_(glove_embedding)
-        self.embedding_word.weight.requires_grad = hparams.fintune_word_embedding
+        if checkpoint is None:
+            # Load glove embeddings from spacy library
+            nlp = spacy.load('en_core_web_lg')
+            glove_embedding = load_spacy_glove_embedding(nlp, self.vocab_word)
+            self.embedding_word.weight.data.copy_(glove_embedding)
+            self.embedding_word.weight.requires_grad = hparams.fintune_word_embedding
 
         # Define word and turn-level Encoder
         self.word_level_encoder = transformer.Encoder(
@@ -95,7 +96,6 @@ class SummarizationModel(nn.Module):
         # Inputs Self-Attention
         inputs = torch.squeeze(inputs, 0) # [1, num_turns, seq_len]
         inputs_word_emb = self.embedding_word(inputs) # [num_turns, seq_len, 300]
-
 
         # Word-level Attention
         word_level_outputs = self.word_level_encoder(inputs=inputs_word_emb, src_masks=src_masks) # [num_turns, seq_len, 300]

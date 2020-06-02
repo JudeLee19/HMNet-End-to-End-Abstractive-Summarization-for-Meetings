@@ -11,9 +11,12 @@ from models.model import SummarizationModel
 from utils.checkpointing import CheckpointManager, load_checkpoint
 from predictor import Predictor
 
+torch.manual_seed(666)
+torch.backends.cudnn.deterministic = True
+
 
 class Summarization(object):
-    def __init__(self, hparams):
+    def __init__(self, hparams, mode='train'):
         self.hparams = hparams
         self._logger = logging.getLogger(__name__)
         print('self.hparams:', self.hparams)
@@ -24,9 +27,12 @@ class Summarization(object):
             self.device = torch.device('cpu')
 
         self.build_dataloader()
-        self.build_model()
-        self.setup_training()
-        self.build_eval_model()
+
+        if mode == 'train':
+            self.build_model()
+            self.setup_training()
+        elif mode == 'eval':
+            self.build_eval_model()
 
     def build_dataloader(self):
         self.train_dataset = AMIDataset(self.hparams, type='train')
@@ -100,7 +106,7 @@ class Summarization(object):
 
     def build_eval_model(self):
         # Define predictor
-        self.predictor = Predictor(self.hparams, model=self.model, vocabs=self.vocab_word,
+        self.predictor = Predictor(self.hparams, model=None, vocabs=self.vocab_word,
                                    checkpoint=self.hparams.load_pthpath)
 
     def train(self):
@@ -118,17 +124,18 @@ class Summarization(object):
                 logits = self.model(inputs=dialogues_ids, targets=labels_ids,
                                     src_masks=src_masks) # [batch x tgt_seq_len, vocab_size]
 
-                # print('정답: ', self.predictor.get_summaries(labels_ids[0]))
-                # print('예측: ', self.predictor.get_summaries_from_logits(logits))
+                if epoch >= 60:
+                    print('정답: ', self.predictor.get_summaries(labels_ids[0]))
+                    print('예측: ', self.predictor.get_summaries_from_logits(logits))
 
                 labels_ids = labels_ids.view(labels_ids.shape[0] * labels_ids.shape[1]) # [batch x tgt_seq_len]
 
                 loss = self.criterion(logits, labels_ids)
                 loss.backward()
 
-                self.optimizer.step()
                 # gradient cliping
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.hparams.max_gradient_norm)
+                self.optimizer.step()
                 self.optimizer.zero_grad()
 
                 global_iteration_step += 1
@@ -151,7 +158,7 @@ class Summarization(object):
             # -------------------------------------------------------------------------
             #   Evaluation
             # -------------------------------------------------------------------------
-            if epoch >= 30:
+            if epoch >= 60:
                 self.evaluate()
 
     def evaluate(self):

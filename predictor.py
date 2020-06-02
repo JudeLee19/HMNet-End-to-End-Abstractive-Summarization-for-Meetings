@@ -25,11 +25,13 @@ class Predictor(object):
 
         self.device = hparams.device
 
-        if (model == None) and (checkpoint is not None):
+        if (model == None) and (checkpoint != ''):
             self.build_model()
             if self.vocab_word is None:
                 self.vocab_word = load_vocab(self.hparams.vocab_word_path)
             model_state_dict, optimizer_state_dict = load_checkpoint(self.hparams.load_pthpath)
+
+            print('============= Loading Trained Model from: ', self.hparams.load_pthpath, ' ==================')
             if isinstance(self.model, nn.DataParallel):
                 self.model.module.load_state_dict(model_state_dict)
             else:
@@ -72,7 +74,7 @@ class Predictor(object):
         max_indices = torch.argmax(probs, dim=1)
         tokens = [self.vocab_word.id2token[idx.item()] for idx in max_indices]
         summary = ' '.join(tokens)
-        return summary
+        return max_indices, summary
 
     def inference(self, inputs, src_masks, labels_ids=None):
         # Give full probability to the first beam on the first step.
@@ -125,13 +127,18 @@ class Predictor(object):
         if labels_ids is not None:
             labels_ids = labels_ids.detach().repeat(self.beam_size, 1)
 
+        greedy_results = []
+        greedy_token_results = []
         # for step in range(self.max_length):
-        for step in range(50):
+        for step in range(30):
             print('[Step]: ', step)
-            tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
+            # tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
 
             # Ground-truth 입력으로 바꿔봄
-            # tgt_inputs = labels_ids[:, step].view(1, -1).transpose(0, 1)
+            if step == 0:
+                tgt_inputs = labels_ids[:, step].view(1, -1).transpose(0, 1)
+            else:
+                tgt_inputs = greedy_results[-1]
 
             tgt_word_emb = self.model.embedding_word(tgt_inputs) # (beam_size, tgt_seq_len==1, 300)
 
@@ -144,8 +151,15 @@ class Predictor(object):
 
             logits, log_probs = self.generator(decoder_outputs)  # logits: [beam_size, tgt_seq_len==1, vocab_size]
 
-            print('max_token(from logits): ', self.get_summaries_from_logits(logits))
+            max_indices, max_token = self.get_summaries_from_logits(logits)
+            print('max_token(from logits): ', max_token)
+            print('max_indices shape: ', max_indices)
             print('\n')
+            max_indices = max_indices.unsqueeze(0)
+            greedy_results.append(max_indices)
+            greedy_token_results.append(max_token)
+
+            continue
 
             log_probs = log_probs.squeeze(1) # [beam_size, vocab_size]
             vocab_size = log_probs.size(1)
@@ -203,7 +217,8 @@ class Predictor(object):
 
             is_finished = topk_ids.eq(self.end_token_id)
 
-            if step + 1 == self.max_length:
+            # if step + 1 == self.max_length:
+            if step + 1 == 179:
                 is_finished.fill_(1)
             end_condition = is_finished[:, 0].eq(1)
 
@@ -246,6 +261,8 @@ class Predictor(object):
             turn_level_memory_beam = turn_level_memory_beam.index_select(0, select_indices)
 
             decoder_state.beam_update(select_indices)
+
+        print('greedy_results: ', ''.join(greedy_token_results))
 
         preds = results['predictions'][0][0]
         summary = self.get_summaries(preds)

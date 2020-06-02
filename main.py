@@ -39,14 +39,14 @@ def init_logger(path):
 def train_model(args):
     hparams = PARAMS
     hparams = collections.namedtuple("HParams", sorted(hparams.keys()))(**hparams)
-    summarization = Summarization(hparams)
+    summarization = Summarization(hparams, mode='train')
     summarization.train()
 
 
 def evaluate_model(args):
     hparams = PARAMS
     hparams = collections.namedtuple("HParams", sorted(hparams.keys()))(**hparams)
-    summarization = Summarization(hparams)
+    summarization = Summarization(hparams, mode='eval')
     summarization.evaluate()
 
 
