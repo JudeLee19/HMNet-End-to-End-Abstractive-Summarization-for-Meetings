@@ -53,8 +53,9 @@ class Predictor(object):
 
     def generator(self, decoder_outputs):
         # Reuse the weight of embedding matrix D, to decode v_{k-1} into a probability distribution
-        logits = torch.matmul(decoder_outputs, torch.transpose(self.model.embedding_word.weight, 0, 1))
+        # logits = torch.matmul(decoder_outputs, torch.transpose(self.model.embedding_word.weight, 0, 1))
 
+        logits = self.model.final_linear(decoder_outputs)
         shape = logits.shape
         logits = logits.view(shape[0] * shape[1], shape[-1])  # [beam_size x tgt_seq_len, vocab_size]
 

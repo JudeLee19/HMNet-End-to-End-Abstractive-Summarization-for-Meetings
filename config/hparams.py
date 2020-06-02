@@ -5,14 +5,14 @@ All configurations are set following "End-to-End Abstractive Summarization for M
 
 PARAMS = defaultdict(
     # Environment
-    # device='cuda',
-    device='cpu',
+    device='cuda',
+    # device='cpu',
     workers=1,
     gpu_ids=[0],
     data_dir='data/',
     save_dirpath='checkpoints/',
     # load_pthpath="",
-    load_pthpath="checkpoints/checkpoint_47.pth",
+    load_pthpath="checkpoints/checkpoint_28.pth",
     vocab_word_path='checkpoints/vocab_word',
     # Training Hyperparemter
     batch_size=1,

@@ -113,20 +113,12 @@ class MultiHeadAttention(nn.Module):
             logits += src_masks
 
         # Add bias to mask future values (Triangular Masking)
-        if self.bias_mask is not None:
+        if (self.bias_mask is not None) and (layer_cache is not None):
             logits += self.bias_mask[:, :, :logits.shape[-2], :logits.shape[-1]].type_as(logits.data)
 
         weights = nn.functional.softmax(logits, dim=-1)
 
         self.attention = weights
-
-        # if self.attention_type == 'turn-level-attention':
-        #     print('========= turn-level-attention =============')
-        #     print('queries shape: ', queries.shape)
-        #     print('keys.shape: ', keys.shape)
-        #     print('logits.shape: ', logits.shape)
-        #     print('self.attention shape: ', self.attention.shape)
-        #     print('\n')
 
         weights = self.dropout(weights)
 

@@ -72,6 +72,8 @@ class SummarizationModel(nn.Module):
             hparams.dropout,
             use_mask=True
         )
+        self.final_linear = nn.Linear(self.embedding_word.embedding_dim, self.embedding_word.num_embeddings) # [300, vocab_size]
+        self.final_linear.weight = self.embedding_word.weight
 
     def forward(self, inputs, targets, src_masks=None):
         """
@@ -115,7 +117,9 @@ class SummarizationModel(nn.Module):
         decoder_outputs, state = self.decoder((targets_word_emb, word_level_outputs, turn_level_outputs)) # [1, tgt_seq_len, 300]
 
         # Reuse the weight of embedding matrix D, to decode v_{k-1} into a probability distribution
-        logits = torch.matmul(decoder_outputs, torch.transpose(self.embedding_word.weight, 0, 1))
+        # logits = torch.matmul(decoder_outputs, torch.transpose(self.embedding_word.weight, 0, 1))
+
+        logits = self.final_linear(decoder_outputs)
 
         shape = logits.shape
         logits = logits.view(shape[0]*shape[1], shape[-1]) # [beam_size x tgt_seq_len, vocab_size]
