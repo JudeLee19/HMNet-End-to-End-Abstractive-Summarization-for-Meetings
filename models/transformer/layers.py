@@ -169,11 +169,6 @@ class Encoder(nn.Module):
         x = self.embedding_proj(x)
         x += self.timing_signal[:, :inputs.shape[1], :].type_as(inputs.data)
 
-
-        # print('======= In Encoder =====')
-        # print('src_masks shape: ', src_masks.shape)
-        # print('\n')
-
         y = self.encoder_layers((x, src_masks))
         y = self.layer_norm(y)
         return y
@@ -226,8 +221,6 @@ class DecoderLayer(nn.Module):
 
     def forward(self, inputs, layer_cache=None):
         decoder_inputs, word_encoder_outputs, turn_encoder_outputs = inputs
-
-        # 여기서 decoder_inputs에 prev-targets-inputs 붙여줘야함!!
 
         x_norm = self.layer_norm_mha_dec(decoder_inputs)
 
@@ -318,6 +311,8 @@ class Decoder(nn.Module):
     def forward(self, inputs, state=None, step=None):
         decoder_inputs, word_encoder_outputs, turn_encoder_outputs = inputs
 
+        # print('decoder_inputs: ', decoder_inputs)
+
         # Add input dropout
         x = self.input_dropout(decoder_inputs)
 
@@ -339,6 +334,9 @@ class Decoder(nn.Module):
             # y = x
             # utilize state caching only for inference
             for idx, decoder_layer in enumerate(self.decoder_layers):
+
+                # print('[Decoder_Idx]: ', idx)
+
                 layer_cache = state.layer_caches[idx]
                 output, word_encoder_outputs, turn_encoder_outputs = decoder_layer(inputs=(output, word_encoder_outputs, turn_encoder_outputs),
                                                                                   layer_cache=layer_cache)

@@ -31,6 +31,7 @@ class Summarization(object):
         if mode == 'train':
             self.build_model()
             self.setup_training()
+            self.build_eval_model(self.model)
         elif mode == 'eval':
             self.build_eval_model()
 
@@ -104,9 +105,9 @@ class Summarization(object):
             """
         )
 
-    def build_eval_model(self):
+    def build_eval_model(self, model=None):
         # Define predictor
-        self.predictor = Predictor(self.hparams, model=None, vocabs=self.vocab_word,
+        self.predictor = Predictor(self.hparams, model=model, vocabs=self.vocab_word,
                                    checkpoint=self.hparams.load_pthpath)
 
     def train(self):
@@ -124,9 +125,9 @@ class Summarization(object):
                 logits = self.model(inputs=dialogues_ids, targets=labels_ids,
                                     src_masks=src_masks) # [batch x tgt_seq_len, vocab_size]
 
-                if epoch >= 60:
-                    print('정답: ', self.predictor.get_summaries(labels_ids[0]))
-                    print('예측: ', self.predictor.get_summaries_from_logits(logits))
+                # if epoch >= 5:
+                #     print('정답: ', self.predictor.get_summaries(labels_ids[0]))
+                #     print('예측: ', self.predictor.get_summaries_from_logits(logits))
 
                 labels_ids = labels_ids.view(labels_ids.shape[0] * labels_ids.shape[1]) # [batch x tgt_seq_len]
 
@@ -158,7 +159,7 @@ class Summarization(object):
             # -------------------------------------------------------------------------
             #   Evaluation
             # -------------------------------------------------------------------------
-            if epoch >= 60:
+            if epoch >= 15:
                 self.evaluate()
 
     def evaluate(self):

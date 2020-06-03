@@ -73,7 +73,8 @@ class SummarizationModel(nn.Module):
             use_mask=True
         )
         self.final_linear = nn.Linear(self.embedding_word.embedding_dim, self.embedding_word.num_embeddings) # [300, vocab_size]
-        self.final_linear.weight = self.embedding_word.weight
+        if checkpoint is None:
+            self.final_linear.weight = self.embedding_word.weight
 
     def forward(self, inputs, targets, src_masks=None):
         """
