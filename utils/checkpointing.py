@@ -174,6 +174,7 @@ def load_checkpoint(checkpoint_pthpath):
     # load encoder, decoder, optimizer state_dicts
     components = torch.load(checkpoint_pthpath)
     return components["model"], components["optimizer"]
+    # return components
 
 
 def load_vocab(path):

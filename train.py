@@ -1,4 +1,6 @@
 import os
+# os.environ["CUDA_VISIBLE_DEVICES"]="1"
+
 import logging
 from datetime import datetime
 from tqdm import tqdm
@@ -9,6 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from data.dataset import AMIDataset
 from models.model import SummarizationModel
 from utils.checkpointing import CheckpointManager, load_checkpoint
+from utils.utils import compute_rouge_scores
 from predictor import Predictor
 
 torch.manual_seed(666)
@@ -33,6 +36,10 @@ class Summarization(object):
             self.setup_training()
             self.build_eval_model(self.model)
         elif mode == 'eval':
+            self.save_dirpath = self.hparams.save_dirpath
+            today = str(datetime.today().month) + 'M_' + str(datetime.today().day) + 'D' + '_GEN_MAX_' + str(self.hparams.gen_max_length)
+            tensorboard_path = self.save_dirpath + today
+            self.summary_writer = SummaryWriter(tensorboard_path, comment="Unmt")
             self.build_eval_model()
 
     def build_dataloader(self):
@@ -45,8 +52,11 @@ class Summarization(object):
             drop_last=True
         )
         self.vocab_word = self.train_dataset.vocab_word
+        self.vocab_role = self.train_dataset.vocab_role
+        self.vocab_pos = self.train_dataset.vocab_pos
 
-        self.test_dataset = AMIDataset(self.hparams, type='test', vocab_word=self.vocab_word)
+        self.test_dataset = AMIDataset(self.hparams, type='test',
+                                       vocab_word=self.vocab_word, vocab_role=self.vocab_role, vocab_pos=self.vocab_pos)
         self.test_dataloader = DataLoader(
             self.test_dataset,
             batch_size=self.hparams.batch_size,
@@ -62,7 +72,8 @@ class Summarization(object):
 
     def build_model(self):
         # Define model
-        self.model = SummarizationModel(self.hparams, self.vocab_word)
+        self.model = SummarizationModel(hparams=self.hparams, vocab_word=self.vocab_word,
+                                        vocab_role=self.vocab_role, vocab_pos=self.vocab_pos)
 
         # Multi-GPU
         self.model = self.model.to(self.device)
@@ -78,7 +89,9 @@ class Summarization(object):
 
     def setup_training(self):
         self.save_dirpath = self.hparams.save_dirpath
-        self.summary_writer = SummaryWriter(self.save_dirpath)
+        today = str(datetime.today().month) + 'M_' + str(datetime.today().day) + 'D'
+        tensorboard_path = self.save_dirpath + today
+        self.summary_writer = SummaryWriter(tensorboard_path, comment="Unmt")
         self.checkpoint_manager = CheckpointManager(self.model, self.optimizer, self.save_dirpath, hparams=self.hparams)
 
         # If loading from checkpoint, adjust start epoch and load parameters.
@@ -107,7 +120,8 @@ class Summarization(object):
 
     def build_eval_model(self, model=None):
         # Define predictor
-        self.predictor = Predictor(self.hparams, model=model, vocabs=self.vocab_word,
+        self.predictor = Predictor(self.hparams, model=model, vocab_word=self.vocab_word,
+                                   vocab_role=self.vocab_role, vocab_pos=self.vocab_pos,
                                    checkpoint=self.hparams.load_pthpath)
 
     def train(self):
@@ -119,16 +133,15 @@ class Summarization(object):
             for batch_idx, batch in enumerate(tqdm_batch_iterator):
                 data = batch
                 dialogues_ids = data['dialogues_ids'].to(self.device)
+                pos_ids = data['pos_ids'].to(self.device)
                 labels_ids = data['labels_ids'].to(self.device) # [batch==1, tgt_seq_len]
                 src_masks = data['src_masks'].to(self.device)
+                role_ids = data['role_ids'].to(self.device)
 
-                logits = self.model(inputs=dialogues_ids, targets=labels_ids,
-                                    src_masks=src_masks) # [batch x tgt_seq_len, vocab_size]
+                logits = self.model(inputs=dialogues_ids, targets=labels_ids[:, :-1],  # before <END> token
+                                    src_masks=src_masks, role_ids=role_ids, pos_ids=pos_ids) # [batch x tgt_seq_len, vocab_size]
 
-                # if epoch >= 5:
-                #     print('정답: ', self.predictor.get_summaries(labels_ids[0]))
-                #     print('예측: ', self.predictor.get_summaries_from_logits(logits))
-
+                labels_ids = labels_ids[:, 1:]
                 labels_ids = labels_ids.view(labels_ids.shape[0] * labels_ids.shape[1]) # [batch x tgt_seq_len]
 
                 loss = self.criterion(logits, labels_ids)
@@ -147,32 +160,46 @@ class Summarization(object):
                     self.optimizer.param_groups[0]['lr'])
                 tqdm_batch_iterator.set_description(description)
 
-            # -------------------------------------------------------------------------
-            #   ON EPOCH END  (checkpointing and validation)
-            # -------------------------------------------------------------------------
+            # # -------------------------------------------------------------------------
+            # #   ON EPOCH END  (checkpointing and validation)
+            # # -------------------------------------------------------------------------
             self.checkpoint_manager.step(epoch)
             self.previous_model_path = os.path.join(self.checkpoint_manager.ckpt_dirpath, "checkpoint_%d.pth" % (epoch))
             self._logger.info(self.previous_model_path)
 
             torch.cuda.empty_cache()
 
-            # -------------------------------------------------------------------------
-            #   Evaluation
-            # -------------------------------------------------------------------------
-            if epoch >= 15:
-                self.evaluate()
+            if epoch % 10 == 0 and epoch >= 30:
+                self.evaluate(epoch=epoch)
 
-    def evaluate(self):
-
+    def evaluate(self, epoch=None):
         with torch.no_grad():
+            cand_list = []
+            ref_list = []
             for batch_idx, batch in enumerate(tqdm(self.test_dataloader)):
+
                 data = batch
                 dialogues_ids = data['dialogues_ids'].to(self.device)
+                pos_ids = data['pos_ids'].to(self.device)
                 labels_ids = data['labels_ids'].to(self.device)  # [batch, tgt_seq_len]
                 src_masks = data['src_masks'].to(self.device)
+                role_ids = data['role_ids'].to(self.device)
 
-                print('labels_ids shape: ', labels_ids.shape)
-                print('정답: ', self.predictor.get_summaries(labels_ids[0]))
+                reference_summaries = self.predictor.get_summaries(labels_ids[0])
+                reference_summaries = reference_summaries.replace('<BEGIN>', '').replace('<END>', '')
 
-                summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks, labels_ids=labels_ids)
-                break
+                print('\n\n[정답_요약문]: ', reference_summaries)
+
+                generated_summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks,
+                                                               role_ids=role_ids, pos_ids=pos_ids)
+
+                cand_list.append(generated_summaries)
+                ref_list.append(reference_summaries)
+
+            results_dict = compute_rouge_scores(cand_list, ref_list)
+            print('[ROUGE]: ', results_dict)
+
+            if epoch is not None:
+                self.summary_writer.add_scalar('test/rouge-F1', results_dict['rouge_1_f_score'], epoch)
+                self.summary_writer.add_scalar('test/rouge-F2', results_dict['rouge_2_f_score'], epoch)
+                self.summary_writer.add_scalar('test/rouge-FL', results_dict['rouge_l_f_score'], epoch)

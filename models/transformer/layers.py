@@ -10,6 +10,7 @@ import math
 from .sublayers import MultiHeadAttention, PositionwiseFeedForward
 from ..normalization import LayerNorm
 from collections import defaultdict
+import time
 
 
 def tile(a, dim, n_tile):
@@ -94,15 +95,9 @@ class EncoderLayer(nn.Module):
         self.layer_norm_mha = LayerNorm(hidden_size)
         self.layer_norm_ffn = LayerNorm(hidden_size)
 
-    def forward(self, inputs):
+    def forward(self, inputs, src_masks=None):
 
-        if len(inputs) == 2:
-            x, src_masks = inputs
-        else:
-            x = inputs
-            src_masks = None
-
-        # print('src_masks: ', src_masks)
+        x, src_masks = inputs, src_masks
 
         # Layer Norm
         x_norm = self.layer_norm_mha(x)
@@ -155,21 +150,29 @@ class Encoder(nn.Module):
                   attention_dropout,
                   relu_dropout)
 
-        # Pos-tag & entity feature should be added later.
+        # Pos-tag & Entity feature should be added later.
         self.embedding_proj = nn.Linear(embedding_size, hidden_size, bias=False)
 
         self.encoder_layers = nn.Sequential(*[EncoderLayer(*params) for l in range(num_layers)])
         self.layer_norm = LayerNorm(hidden_size)
         self.input_dropout = nn.Dropout(input_dropout)
 
-    def forward(self, inputs, src_masks=None):
+    def forward(self, inputs, src_masks=None, role_inputs=None):
 
         # Construct Transformer-Encoder input representation. inputs is the result vectors of glove & pos embeddings.
+
+        if role_inputs is not None:
+            inputs = torch.cat((inputs, role_inputs), dim=-1)
+
         x = self.input_dropout(inputs)
         x = self.embedding_proj(x)
         x += self.timing_signal[:, :inputs.shape[1], :].type_as(inputs.data)
 
-        y = self.encoder_layers((x, src_masks))
+        # y = self.encoder_layers((x, src_masks))
+        y = x
+        for idx, encoder_layer in enumerate(self.encoder_layers):
+            y = encoder_layer(inputs=y, src_masks=src_masks)
+
         y = self.layer_norm(y)
         return y
 
@@ -199,16 +202,17 @@ class DecoderLayer(nn.Module):
 
         super(DecoderLayer, self).__init__()
         self.multi_head_attention_dec = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
-                                                           hidden_size, num_heads, bias_mask, attention_dropout,
+                                                           hidden_size, num_heads, bias_mask=bias_mask,
+                                                           dropout=attention_dropout,
                                                            attention_type='self-attention')
 
         self.multi_head_attention_word = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
                                                            hidden_size, num_heads, None, dropout=attention_dropout,
-                                                            attention_type='word-level-attention')
+                                                            attention_type='word-attention')
 
         self.multi_head_attention_turn = MultiHeadAttention(hidden_size, total_key_depth, total_value_depth,
                                                            hidden_size, num_heads, None, dropout=attention_dropout,
-                                                            attention_type='turn-level-attention')
+                                                            attention_type='turn-attention')
 
         self.positionwise_feed_forward = PositionwiseFeedForward(hidden_size, filter_size, hidden_size,
                                                                  layer_config='cc', padding = 'left',
@@ -218,35 +222,44 @@ class DecoderLayer(nn.Module):
         self.layer_norm_mha_word_enc = LayerNorm(hidden_size)
         self.layer_norm_mha_turn_enc = LayerNorm(hidden_size)
         self.layer_norm_ffn = LayerNorm(hidden_size)
+        self.bias_mask = bias_mask
 
     def forward(self, inputs, layer_cache=None):
         decoder_inputs, word_encoder_outputs, turn_encoder_outputs = inputs
 
         x_norm = self.layer_norm_mha_dec(decoder_inputs)
 
-        # Masked Multi-head attention for decoding inputs
+        # Masked Multi-head Self-attention for decoding inputs
+        start_time = time.time()
         y = self.multi_head_attention_dec(x_norm, x_norm,
                                           x_norm, layer_cache=layer_cache)
+        # print('[Self-Attention]: ', int(round((time.time() - start_time) * 1000)), 'MS')
+
 
         x = self.dropout(decoder_inputs + y) # [1, tgt_seq_len, 300]
 
         # Layer Normalization for word-level attention
         x_norm = self.layer_norm_mha_word_enc(x)
 
+
+        start_time = time.time()
         # Word-level cross-attention
         y = self.multi_head_attention_word(x_norm, word_encoder_outputs,
                                            word_encoder_outputs,
                                            layer_cache=layer_cache)
+        # print('[Word-level cross-attention]: ', int(round((time.time() - start_time) * 1000)), 'MS')
 
         x = self.dropout(x + y)
 
         # Layer Norm of turn-level cross attention
         x_norm = self.layer_norm_mha_turn_enc(x)
 
+        start_time = time.time()
         # Turn-level cross-attention
         y = self.multi_head_attention_turn(x_norm, turn_encoder_outputs,
                                            turn_encoder_outputs,
                                            layer_cache=layer_cache)
+        # print('[Turn-level cross-attention]: ', int(round((time.time() - start_time) * 1000)), 'MS')
 
         x = self.dropout(x + y)
 
@@ -334,25 +347,10 @@ class Decoder(nn.Module):
             # y = x
             # utilize state caching only for inference
             for idx, decoder_layer in enumerate(self.decoder_layers):
-
-                # print('[Decoder_Idx]: ', idx)
-
-                layer_cache = state.layer_caches[idx]
                 output, word_encoder_outputs, turn_encoder_outputs = decoder_layer(inputs=(output, word_encoder_outputs, turn_encoder_outputs),
-                                                                                  layer_cache=layer_cache)
-
-                state.update_state(idx,
-                                   attention_type='self-attention',
-                                   key_projected=decoder_layer.multi_head_attention_dec.key_projected,
-                                   value_projected=decoder_layer.multi_head_attention_dec.value_projected)
-                state.update_state(idx,
-                                   attention_type='word-level-attention',
-                                   key_projected=decoder_layer.multi_head_attention_word.key_projected,
-                                   value_projected=decoder_layer.multi_head_attention_word.value_projected)
-                state.update_state(idx,
-                                   attention_type='turn-level-attention',
-                                   key_projected=decoder_layer.multi_head_attention_turn.key_projected,
-                                   value_projected=decoder_layer.multi_head_attention_turn.value_projected)
+                                                                                   layer_cache=state.cache[
+                                                                                       "layer_{}".format(idx)]
+                                                                                   if state.cache is not None else None)
 
         # Final layer normalization
         y = self.layer_norm(output)
@@ -361,6 +359,7 @@ class Decoder(nn.Module):
 
     def init_decoder_state(self):
         state = DecoderState()
+        state._init_cache(self.num_layers)
         return state
 
 
@@ -368,21 +367,33 @@ class DecoderState(object):
     def __init__(self):
         self.previous_input = None
         self.previous_layer_inputs = None
-        self.layer_caches = defaultdict(lambda: {'self-attention': None, 'word-level-attention': None,
-                                                          'turn-level-attention': None})
+        self.layer_caches = defaultdict(lambda: {'self-attention': None,
+                                                 'word-attention': None,
+                                                 'turn-attention': None})
 
-    def update_state(self, layer_index, attention_type, key_projected, value_projected):
+        self.cache = None
 
-        self.layer_caches[layer_index][attention_type] = {
-            'key_projected': key_projected,
-            'value_projected': value_projected
-        }
+    def _init_cache(self, num_layers):
+        self.cache = {}
 
-    def beam_update(self, positions):
-        for layer_index in self.layer_caches:
-            for mode in ('self-attention', 'word-level-attention', 'turn-level-attention'):
-                if self.layer_caches[layer_index][mode] is not None:
-                    for projection in self.layer_caches[layer_index][mode]:
-                        cache = self.layer_caches[layer_index][mode][projection]
-                        if cache is not None:
-                            cache.data.copy_(cache.data.index_select(0, positions))
+        for l in range(num_layers):
+            layer_cache = {
+                "word_keys": None,
+                "word_values": None,
+                "turn_keys": None,
+                "turn_values": None
+            }
+            layer_cache["self_keys"] = None
+            layer_cache["self_values"] = None
+            self.cache["layer_{}".format(l)] = layer_cache
+
+    def map_batch_fn(self, fn):
+        def _recursive_map(struct, batch_dim=0):
+            for k, v in struct.items():
+                if v is not None:
+                    if isinstance(v, dict):
+                        _recursive_map(v)
+                    else:
+                        struct[k] = fn(v, batch_dim)
+        if self.cache is not None:
+            _recursive_map(self.cache)

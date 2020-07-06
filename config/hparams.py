@@ -1,33 +1,41 @@
 from collections import defaultdict
 """
-All configurations are set following "End-to-End Abstractive Summarization for Meetings" paper.
+All configurations are set following 
+"End-to-End Abstractive Summarization for Meetings" paper.
+https://arxiv.org/abs/2004.02016
 """
 
 PARAMS = defaultdict(
     # Environment
     device='cuda',
     # device='cpu',
-    workers=1,
+    workers=24,
     gpu_ids=[0],
     data_dir='data/',
-    save_dirpath='checkpoints/',
+    save_dirpath='checkpoints/with_role_gen_500_fsize_64_pos/',
+    use_role=False,
+    use_pos=False,
     load_pthpath="",
-    # load_pthpath="checkpoints/checkpoint_48.pth",
     vocab_word_path='checkpoints/vocab_word',
     # Training Hyperparemter
     batch_size=1,
-    num_epochs=50,
+    num_epochs=100,
+    start_eval_epoch=30,
     fintune_word_embedding=True,
     # Transformer
     embedding_size_word=300,
+    embedding_size_role=20,
+    embedding_size_pos=12,
     num_heads=2,
     num_hidden_layers=2,
     hidden_size=300,
-    min_length=40,
+    min_length=280,
     max_length=800,
+    gen_max_length=600,
     attention_key_channels=0,
     attention_value_channels=0,
-    filter_size=128,
+    filter_size=64,
+    # filter_size=32,
     dropout=0.1,
     optimizer_adam_beta1=0.9,
     optimizer_adam_beta2=0.999,
@@ -35,8 +43,6 @@ PARAMS = defaultdict(
     learning_rate=5e-4,
     max_gradient_norm=2,
     # Decoding
-    beam_size=1,
-    n_top=5,
+    beam_size=12,
     blook_trigram=True
-
 )

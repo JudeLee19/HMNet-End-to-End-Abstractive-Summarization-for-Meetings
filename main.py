@@ -39,6 +39,16 @@ def init_logger(path):
 def train_model(args):
     hparams = PARAMS
     hparams = collections.namedtuple("HParams", sorted(hparams.keys()))(**hparams)
+
+    save_path = args.save_path
+    if save_path == '':
+        raise ValueError("Muse provide save path !")
+
+    hparams = hparams._replace(save_dirpath=save_path)
+    hparams = hparams._replace(use_role=args.use_role)
+    hparams = hparams._replace(use_role=args.use_pos)
+
+    print('hparams.save_dirpath: ', hparams.save_dirpath)
     summarization = Summarization(hparams, mode='train')
     summarization.train()
 
@@ -46,14 +56,49 @@ def train_model(args):
 def evaluate_model(args):
     hparams = PARAMS
     hparams = collections.namedtuple("HParams", sorted(hparams.keys()))(**hparams)
-    summarization = Summarization(hparams, mode='eval')
-    summarization.evaluate()
+
+    model_path = args.model_path
+    if model_path == '':
+        raise ValueError('Must provide model_path !')
+    save_dirpath =  '/'.join(model_path.split('/')[:-1])
+    save_dirpath = save_dirpath + '/'
+    hparams = hparams._replace(save_dirpath=save_dirpath)
+
+    # gen_max_length
+    gen_max_length = args.gen_max_length
+    print('gen_max_length: ', gen_max_length)
+    hparams = hparams._replace(gen_max_length=gen_max_length)
+    hparams = hparams._replace(use_role=args.use_role)
+    hparams = hparams._replace(use_role=args.use_pos)
+
+    epoch = hparams.start_eval_epoch
+    print('\n ========= [Evaluation Start Epoch: ', epoch, ']================== ')
+    for i in range(int(epoch), 100):
+        load_pthpath = '/'.join(model_path.split('/')[:-1]) + '/checkpoint_' + str(i) + '.pth'
+        hparams= hparams._replace(load_pthpath=load_pthpath)
+        print('hparams.load_pthpath: ', hparams.load_pthpath)
+        summarization = Summarization(hparams, mode='eval')
+        summarization.evaluate(epoch=i)
+        del summarization
+    print('\n')
 
 
 if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(description="End-to-End Meeting Summarization (PyTorch)")
     arg_parser.add_argument("--mode", dest="mode", type=str, default="",
                             help="(train/eval)")
+    arg_parser.add_argument("--model_path", dest="model_path", type=str, default="",
+                            help="trained model path")
+    arg_parser.add_argument("--save_path", dest="save_path", type=str, default="",
+                            help="path to save the trained model")
+    arg_parser.add_argument("--gen_max_length", dest="gen_max_length", type=int,
+                            default=500, help="gen_max_length")
+    arg_parser.add_argument("--use_role", dest="use_role", type=bool,
+                            default=False)
+    arg_parser.add_argument("--use_pos", dest="use_pos", type=bool,
+                            default=False)
+
+
     args = arg_parser.parse_args()
     mode = args.mode
 

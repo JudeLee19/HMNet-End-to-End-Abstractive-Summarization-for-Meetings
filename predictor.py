@@ -1,24 +1,27 @@
 import torch
 from torch import nn
 from utils.checkpointing import load_checkpoint, load_vocab
+from utils.utils import tile
 from models.model import SummarizationModel
-from tqdm import tqdm
 from data.dataset import *
-from beam_search import BeamSearch
+import time
+from tqdm import tqdm
 
 
 class Predictor(object):
-    def __init__(self, hparams, model=None, vocabs=None, checkpoint=None):
+    def __init__(self, hparams, model=None, vocab_word=None, vocab_role=None, vocab_pos=None, checkpoint=None):
         super(Predictor, self).__init__()
         self.hparams = hparams
         self.model = model
-        self.vocab_word = vocabs
+        self.vocab_word = vocab_word
+        self.vocab_role = vocab_role
+        self.vocab_pos = vocab_pos
         self.device = hparams.device
         self.batch_size = hparams.batch_size
 
         # Beam-search configuration
         self.min_length = hparams.min_length
-        self.max_length = hparams.max_length
+        self.gen_max_length = hparams.gen_max_length
         self.beam_size = hparams.beam_size
         self.start_token_id = self.vocab_word.token2id['<BEGIN>']
         self.end_token_id = self.vocab_word.token2id['<END>']
@@ -32,6 +35,7 @@ class Predictor(object):
             model_state_dict, optimizer_state_dict = load_checkpoint(self.hparams.load_pthpath)
 
             print('============= Loading Trained Model from: ', self.hparams.load_pthpath, ' ==================')
+            print('model_state_dict: ', model_state_dict)
             if isinstance(self.model, nn.DataParallel):
                 self.model.module.load_state_dict(model_state_dict)
             else:
@@ -41,7 +45,8 @@ class Predictor(object):
 
     def build_model(self):
         # Define model
-        self.model = SummarizationModel(self.hparams, self.vocab_word)
+        self.model = SummarizationModel(hparams=self.hparams, vocab_word=self.vocab_word,
+                                        vocab_role=self.vocab_role, vocab_pos=self.vocab_pos)
         self.embedding_word = self.model.embedding_word
 
         # Multi-GPU
@@ -52,40 +57,35 @@ class Predictor(object):
             self.model = nn.DataPzarallel(self.model, self.hparams.gpu_ids)
 
     def generator(self, decoder_outputs):
-        # Reuse the weight of embedding matrix D, to decode v_{k-1} into a probability distribution
-        # logits = torch.matmul(decoder_outputs, torch.transpose(self.model.embedding_word.weight, 0, 1))
-
         logits = self.model.final_linear(decoder_outputs)
         shape = logits.shape
         logits = logits.view(shape[0] * shape[1], shape[-1])  # [beam_size x tgt_seq_len, vocab_size]
-
         softmax = nn.LogSoftmax(dim=-1)
         probs = softmax(logits)
 
-        max_indices = torch.argmax(probs, dim=1)
-        tokens = [self.vocab_word.id2token[idx.item()] for idx in max_indices]
-        max_tokens = ' '.join(tokens)
-        return logits, probs, max_indices, max_tokens
+        return logits, probs
 
     def get_summaries(self, idxs):
         tokens = [self.vocab_word.id2token[idx.item()] for idx in idxs]
         summary = ' '.join(tokens)
         return summary
 
-    # def get_summaries_from_logits(self, logits):
-    #     # logits : [batch x tgt_seq_len, vocab_size]
-    #     softmax = nn.LogSoftmax(dim=-1)
-    #     probs = softmax(logits)
-    #     max_indices = torch.argmax(probs, dim=1)
-    #     tokens = [self.vocab_word.id2token[idx.item()] for idx in max_indices]
-    #     summary = ' '.join(tokens)
-    #     return max_indices, summary
+    def get_summaries_from_logits(self, logits):
+        # logits : [batch x tgt_seq_len, vocab_size]
+        softmax = nn.LogSoftmax(dim=-1)
+        probs = softmax(logits)
+        max_indices = torch.argmax(probs, dim=1)
+        tokens = [self.vocab_word.id2token[idx.item()] for idx in max_indices]
+        summary = ' '.join(tokens)
+        return max_indices, summary
 
-    def inference(self, inputs, src_masks, labels_ids=None):
+    def inference(self, inputs, src_masks, role_ids=None, pos_ids=None):
+        infer_start_time = time.time()
         # Give full probability to the first beam on the first step.
         topk_log_probs = (
             torch.tensor([0.0] + [float("-inf")] * (self.beam_size - 1),
                          device=self.device).repeat(self.batch_size))
+
         alive_seq = torch.full(
             [self.batch_size * self.beam_size, 1],
             self.start_token_id,
@@ -109,63 +109,52 @@ class Predictor(object):
         results["gold_score"] = [0] * self.batch_size
 
         # construct inputs
-        inputs = torch.squeeze(inputs, 0)  # [1, num_turns, seq_len]
-        inputs_word_emb = self.model.embedding_word(inputs) # [1, num_turns, seq_len, 300]
-
-        print('src_masks shape: ', src_masks.shape)
+        inputs = torch.squeeze(inputs, 0)  # [num_turns, seq_len]
+        inputs_word_emb = self.model.embedding_word(inputs) # [num_turns, seq_len, 300]
         src_masks = src_masks.squeeze(0)
+
+        if self.hparams.use_pos:
+            pos_ids = torch.squeeze(pos_ids, 0)
+            inputs_pos_emb = self.model.embedding_pos(pos_ids)  # [num_turns, seq_len, pos_dim==12]
+            inputs_word_emb = torch.cat((inputs_word_emb, inputs_pos_emb), -1)
+
         word_level_outputs = self.model.word_level_encoder(inputs=inputs_word_emb,
                                                            src_masks=src_masks)  # [num_turns, seq_len, 300]
 
         turn_level_inputs = word_level_outputs[:, 0]  # [num_turns, 300]
         turn_level_inputs = torch.unsqueeze(turn_level_inputs, 0)  # [1, num_turns, 300]
-        turn_level_outputs = self.model.turn_level_encoder(turn_level_inputs)  # [1, num_turns, 300]
 
+        if self.hparams.use_role:
+            role_ids = role_ids.squeeze(-1)
+            turn_level_role_emb = self.model.embedding_role(role_ids)  # [1, num_turns, role_dim==30]
+            turn_level_outputs = self.model.turn_level_encoder(inputs=turn_level_inputs,
+                                                         src_masks=None,
+                                                         role_inputs=turn_level_role_emb)  # [1, num_turns, 300]
+        else:
+            turn_level_outputs = self.model.turn_level_encoder(inputs=turn_level_inputs)  # [1, num_turns, 300]
+
+        # word_level_outputs = word_level_outputs[:, 1:]
         word_level_shape = word_level_outputs.shape
-        word_level_outputs = word_level_outputs.view(word_level_shape[0] * word_level_shape[1], 300)
+        word_level_outputs = word_level_outputs.reshape(word_level_shape[0] * word_level_shape[1], 300)
         word_level_outputs = word_level_outputs.unsqueeze(0)  # [1, num_turns * seq_len, 300]
 
         decoder_state = self.model.decoder.init_decoder_state()
+        decoder_state.map_batch_fn(
+            lambda state, dim: tile(state, self.beam_size, dim=dim))
 
         word_level_memory_beam = word_level_outputs.detach().repeat(self.beam_size, 1, 1)  # [beam_size, num_turns * seq_len, 300]
         turn_level_memory_beam = turn_level_outputs.detach().repeat(self.beam_size, 1, 1)  # [beam_size, num_turns, 300]
 
-        if labels_ids is not None:
-            labels_ids = labels_ids.detach().repeat(self.beam_size, 1)
-
-        greedy_results = []
-        greedy_token_results = []
-        for step in range(2):
-            print('[Step]: ', step)
-            # tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
-
-            if step == 0:
-                # Ground-truth 입력으로 바꿔봄
-                tgt_inputs = labels_ids[:, step].view(1, -1).transpose(0, 1)
-            else:
-                # 이전 step의 greedy output을 입력으로 사용
-                tgt_inputs = greedy_results[-1]
+        for step in tqdm(range(self.gen_max_length)):
+            tgt_inputs = alive_seq[:, -1].view(1, -1).transpose(0, 1)  # (beam_size, tgt_seq_len==1)
 
             tgt_word_emb = self.model.embedding_word(tgt_inputs) # (beam_size, tgt_seq_len==1, 300)
-
-            print('tgt_inputs: ', tgt_inputs)
-            print('입력_token: ', self.get_summaries(tgt_inputs))
 
             decoder_outputs, decoder_state = self.model.decoder(
                 inputs=(tgt_word_emb, word_level_memory_beam, turn_level_memory_beam),
                 state=decoder_state, step=step)
 
-            logits, log_probs, max_indices, max_tokens = self.generator(decoder_outputs)  # logits: [beam_size, tgt_seq_len==1, vocab_size]
-
-            print('max_indices: ', max_indices)
-            print('max_token(from logits): ', max_tokens)
-            print('\n')
-            max_indices = max_indices.unsqueeze(0)
-            greedy_results.append(max_indices)
-            greedy_token_results.append(max_tokens)
-
-            continue
-            # ============================= Greedy Search 끝 ============================
+            logits, log_probs = self.generator(decoder_outputs)  # logits: [beam_size, tgt_seq_len==1, vocab_size]
 
             log_probs = log_probs.squeeze(1) # [beam_size, vocab_size]
             vocab_size = log_probs.size(1)
@@ -186,11 +175,11 @@ class Predictor(object):
                 # Trigram-Blocking
                 cur_len = alive_seq.size(1)
                 if (cur_len > 3):
-                    for i in range(alive_seq.size(0)):  # For each (batch x beam_size)
+                    for i in range(self.beam_size):  # For each (batch x beam_size)
+
                         fail = False
-                        words = [int(w) for w in alive_seq[i]]
-                        words = [self.vocab_word.id2token[w] for w in words]
-                        words = ' '.join(words).split()
+                        words = map(lambda n: int(n), alive_seq[i])
+                        words = list(map(lambda w: self.vocab_word.id2token[w], words))
                         if (len(words) <= 3):
                             continue
                         trigrams = [(words[i - 1], words[i], words[i + 1]) for i in range(1, len(words) - 1)]
@@ -223,8 +212,7 @@ class Predictor(object):
 
             is_finished = topk_ids.eq(self.end_token_id)
 
-            # if step + 1 == self.max_length:
-            if step + 1 == 179:
+            if step + 1 == self.gen_max_length:
                 is_finished.fill_(1)
             end_condition = is_finished[:, 0].eq(1)
 
@@ -265,13 +253,14 @@ class Predictor(object):
             select_indices = batch_index.view(-1)
             word_level_memory_beam = word_level_memory_beam.index_select(0, select_indices)
             turn_level_memory_beam = turn_level_memory_beam.index_select(0, select_indices)
-
-            decoder_state.beam_update(select_indices)
-
-        print('[Greedy_results]: ', ' '.join(greedy_token_results))
+            decoder_state.map_batch_fn(
+                lambda state, dim: state.index_select(dim, select_indices))
 
         preds = results['predictions'][0][0]
         summary = self.get_summaries(preds)
-        print(summary)
+        summary = summary.replace('<EOS>', '').replace('<END>', '')
+
+        print('[예측_요약문]: ', summary)
+        return summary
 
 

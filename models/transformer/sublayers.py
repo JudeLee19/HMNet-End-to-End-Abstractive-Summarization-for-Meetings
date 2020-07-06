@@ -78,7 +78,7 @@ class MultiHeadAttention(nn.Module):
         queries = self.query_linear(queries)
         queries = self._split_heads(queries) # [batch_size, num_heads, seq_length, depth/num_heads]
 
-        if (layer_cache is not None) and (layer_cache[self.attention_type] is not None):
+        if (layer_cache is not None):
             # for inference
             if self.attention_type == 'self-attention':
 
@@ -88,18 +88,52 @@ class MultiHeadAttention(nn.Module):
                 keys = self._split_heads(keys)
                 values = self._split_heads(values)
 
-                keys = torch.cat([layer_cache[self.attention_type]['key_projected'], keys], dim=2)
-                values = torch.cat([layer_cache[self.attention_type]['value_projected'], values], dim=2)
-            else:
+                device = keys.device
+                if layer_cache["self_keys"] is not None:
+                    keys = torch.cat(
+                        (layer_cache["self_keys"].to(device), keys),
+                        dim=2)
+                if layer_cache["self_values"] is not None:
+                    values = torch.cat(
+                        (layer_cache["self_values"].to(device), values),
+                        dim=2)
+                layer_cache["self_keys"] = keys
+                layer_cache["self_values"] = values
+
+            elif self.attention_type == 'word-attention':
                 # for word-level or turn-level attention (in these cases, keys and values are already processed in encoder)
-                keys = layer_cache[self.attention_type]['key_projected']
-                values = layer_cache[self.attention_type]['value_projected']
+                if layer_cache["word_keys"] is None:
+                    keys, values = self.key_linear(keys), \
+                                   self.value_linear(values)
+
+                    keys, values = self._split_heads(keys), \
+                                   self._split_heads(values)
+
+                else:
+                    keys, values = layer_cache["word_keys"], \
+                                 layer_cache["word_values"]
+                layer_cache["word_keys"] = keys
+                layer_cache["word_values"] = values
+
+            else:
+                if layer_cache["turn_keys"] is None:
+                    keys, values = self.key_linear(keys), \
+                                   self.value_linear(values)
+
+                    keys, values = self._split_heads(keys), \
+                                   self._split_heads(values)
+
+                else:
+                    keys, values = layer_cache["turn_keys"], \
+                                 layer_cache["turn_values"]
+                layer_cache["turn_keys"] = keys
+                layer_cache["turn_values"] = values
+
         else:
             keys = self.key_linear(keys)
             values = self.value_linear(values)
             keys = self._split_heads(keys)
             values = self._split_heads(values)
-
 
         self.key_projected = keys
         self.value_projected = values
@@ -107,19 +141,17 @@ class MultiHeadAttention(nn.Module):
         # scale queries
         queries *= self.query_scale
 
-        logits = torch.matmul(queries, keys.permute(0, 1, 3, 2)) # (batch_size, num_heads, queries_seq_len,  keys_seq_len)
+        logits = torch.matmul(queries, keys.permute(0, 1, 3, 2)) # (batch_size, num_heads, queries_seq_len, keys_seq_len)
 
         if src_masks is not None:
             # Encoder Self-Attention
             logits += src_masks
 
         # Add bias to mask future values (Triangular Masking)
-        if (self.bias_mask is not None) and (layer_cache is not None):
+        if (self.bias_mask is not None) and (layer_cache is None):
             logits += self.bias_mask[:, :, :logits.shape[-2], :logits.shape[-1]].type_as(logits.data)
 
         weights = nn.functional.softmax(logits, dim=-1)
-
-        self.attention = weights
 
         weights = self.dropout(weights)
 
