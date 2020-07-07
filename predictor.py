@@ -30,16 +30,16 @@ class Predictor(object):
 
         if (model == None) and (checkpoint != ''):
             self.build_model()
+
             if self.vocab_word is None:
                 self.vocab_word = load_vocab(self.hparams.vocab_word_path)
             model_state_dict, optimizer_state_dict = load_checkpoint(self.hparams.load_pthpath)
 
             print('============= Loading Trained Model from: ', self.hparams.load_pthpath, ' ==================')
-            print('model_state_dict: ', model_state_dict)
             if isinstance(self.model, nn.DataParallel):
                 self.model.module.load_state_dict(model_state_dict)
             else:
-                self.model.load_state_dict(model_state_dict)
+                self.model.load_state_dict(model_state_dict, strict=True)
 
         self.model.eval()
 
@@ -47,7 +47,6 @@ class Predictor(object):
         # Define model
         self.model = SummarizationModel(hparams=self.hparams, vocab_word=self.vocab_word,
                                         vocab_role=self.vocab_role, vocab_pos=self.vocab_pos)
-        self.embedding_word = self.model.embedding_word
 
         # Multi-GPU
         self.model = self.model.to(self.device)

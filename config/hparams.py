@@ -36,7 +36,7 @@ PARAMS = defaultdict(
     attention_value_channels=0,
     filter_size=64,
     # filter_size=32,
-    dropout=0.1,
+    dropout=0.2,
     optimizer_adam_beta1=0.9,
     optimizer_adam_beta2=0.999,
     # Optimizier

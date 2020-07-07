@@ -5,6 +5,8 @@ import collections
 
 from config.hparams import *
 from train import Summarization
+import torch
+
 
 
 def init_logger(path):
@@ -47,6 +49,14 @@ def train_model(args):
     hparams = hparams._replace(save_dirpath=save_path)
     hparams = hparams._replace(use_role=args.use_role)
     hparams = hparams._replace(use_role=args.use_pos)
+
+    seed_value = 666
+    torch.manual_seed(seed_value)
+    torch.backends.cudnn.deterministic = True
+
+    if len(hparams.gpu_ids) > 0:
+        torch.cuda.set_device(hparams.gpu_ids[0])
+        torch.cuda.manual_seed(seed_value)
 
     print('hparams.save_dirpath: ', hparams.save_dirpath)
     summarization = Summarization(hparams, mode='train')
