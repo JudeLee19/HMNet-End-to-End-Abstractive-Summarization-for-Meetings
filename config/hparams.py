@@ -20,7 +20,7 @@ PARAMS = defaultdict(
     # Training Hyperparemter
     batch_size=1,
     num_epochs=100,
-    start_eval_epoch=30,
+    start_eval_epoch=40,
     fintune_word_embedding=True,
     # Transformer
     embedding_size_word=300,
@@ -31,7 +31,7 @@ PARAMS = defaultdict(
     hidden_size=300,
     min_length=280,
     max_length=800,
-    gen_max_length=600,
+    gen_max_length=500,
     attention_key_channels=0,
     attention_value_channels=0,
     filter_size=64,

@@ -10,6 +10,16 @@ class SummarizationModel(nn.Module):
         super(SummarizationModel, self).__init__()
         self.hparams = hparams
 
+        seed_value = 2
+        torch.manual_seed(seed_value)
+        torch.backends.cudnn.deterministic = True
+
+        torch.cuda.set_device(0)
+        torch.cuda.manual_seed(seed_value)
+
+        torch.manual_seed(seed_value)
+        torch.backends.cudnn.deterministic = True
+
         # Define Embedding layers
         self.vocab_word = vocab_word
         if self.vocab_word is None:
@@ -27,6 +37,7 @@ class SummarizationModel(nn.Module):
         self.vocab_role_size = len(self.vocab_role.token2id)
         self.vocab_pos_size = len(self.vocab_pos.token2id)
         self.embedding_word = nn.Embedding(self.vocab_size, hparams.embedding_size_word)
+
         if checkpoint is None:
             # Load glove embeddings from spacy library
             nlp = spacy.load('en_core_web_lg')

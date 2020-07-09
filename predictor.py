@@ -6,10 +6,11 @@ from models.model import SummarizationModel
 from data.dataset import *
 import time
 from tqdm import tqdm
+from utils.utils import compute_rouge_scores
 
 
 class Predictor(object):
-    def __init__(self, hparams, model=None, vocab_word=None, vocab_role=None, vocab_pos=None, checkpoint=None):
+    def __init__(self, hparams, model=None, vocab_word=None, vocab_role=None, vocab_pos=None, checkpoint=None, summary_writer=None):
         super(Predictor, self).__init__()
         self.hparams = hparams
         self.model = model
@@ -28,11 +29,14 @@ class Predictor(object):
 
         self.device = hparams.device
 
+        self.summary_writer = summary_writer
+
         if (model == None) and (checkpoint != ''):
             self.build_model()
 
             if self.vocab_word is None:
                 self.vocab_word = load_vocab(self.hparams.vocab_word_path)
+
             model_state_dict, optimizer_state_dict = load_checkpoint(self.hparams.load_pthpath)
 
             print('============= Loading Trained Model from: ', self.hparams.load_pthpath, ' ==================')
@@ -78,8 +82,38 @@ class Predictor(object):
         summary = ' '.join(tokens)
         return max_indices, summary
 
+    def evaluate(self, test_dataloader, epoch=None):
+        with torch.no_grad():
+            cand_list = []
+            ref_list = []
+            for batch_idx, batch in enumerate(tqdm(test_dataloader)):
+
+                data = batch
+                dialogues_ids = data['dialogues_ids'].to(self.device)
+                pos_ids = data['pos_ids'].to(self.device)
+                labels_ids = data['labels_ids'].to(self.device)  # [batch, tgt_seq_len]
+                src_masks = data['src_masks'].to(self.device)
+                role_ids = data['role_ids'].to(self.device)
+
+                reference_summaries = self.get_summaries(labels_ids[0])
+                reference_summaries = reference_summaries.replace('<BEGIN>', '').replace('<END>', '')
+
+                generated_summaries = self.inference(inputs=dialogues_ids, src_masks=src_masks,
+                                                               role_ids=role_ids, pos_ids=pos_ids)
+
+                cand_list.append(generated_summaries)
+                ref_list.append(reference_summaries)
+                break
+
+            results_dict = compute_rouge_scores(cand_list, ref_list)
+            print('[ROUGE]: ', results_dict)
+
+            if epoch is not None:
+                self.summary_writer.add_scalar('test/rouge-F1', results_dict['rouge_1_f_score'], epoch)
+                self.summary_writer.add_scalar('test/rouge-F2', results_dict['rouge_2_f_score'], epoch)
+                self.summary_writer.add_scalar('test/rouge-FL', results_dict['rouge_l_f_score'], epoch)
+
     def inference(self, inputs, src_masks, role_ids=None, pos_ids=None):
-        infer_start_time = time.time()
         # Give full probability to the first beam on the first step.
         topk_log_probs = (
             torch.tensor([0.0] + [float("-inf")] * (self.beam_size - 1),

@@ -1,5 +1,5 @@
 import os
-
+from utils.utils import compare_models
 import logging
 from datetime import datetime
 from tqdm import tqdm
@@ -10,7 +10,6 @@ from torch.utils.tensorboard import SummaryWriter
 from data.dataset import AMIDataset
 from models.model import SummarizationModel
 from utils.checkpointing import CheckpointManager, load_checkpoint, dump_vocab
-from utils.utils import compute_rouge_scores
 from predictor import Predictor
 
 
@@ -20,6 +19,7 @@ class Summarization(object):
         self._logger = logging.getLogger(__name__)
         print('self.hparams:', self.hparams)
         self.logger = logging.getLogger(__name__)
+
         if hparams.device == 'cuda':
             self.device = torch.device('cuda')
         else:
@@ -27,18 +27,20 @@ class Summarization(object):
 
         self.build_dataloader()
 
+        self.save_dirpath = self.hparams.save_dirpath
+        today = str(datetime.today().month) + 'M_' + str(datetime.today().day) + 'D' + '_GEN_MAX_' + str(
+            self.hparams.gen_max_length)
+        tensorboard_path = self.save_dirpath + today
+        self.summary_writer = SummaryWriter(tensorboard_path, comment="Unmt")
+
         if mode == 'train':
             self.build_model()
             self.setup_training()
-            self.predictor = self.build_eval_model(self.model)
+            self.predictor = self.build_eval_model(model=self.model, summary_writer=self.summary_writer)
             dump_vocab(self.hparams.save_dirpath + 'vocab_word', self.vocab_word)
 
         elif mode == 'eval':
-            self.save_dirpath = self.hparams.save_dirpath
-            today = str(datetime.today().month) + 'M_' + str(datetime.today().day) + 'D' + '_GEN_MAX_' + str(self.hparams.gen_max_length)
-            tensorboard_path = self.save_dirpath + today
-            self.summary_writer = SummaryWriter(tensorboard_path, comment="Unmt")
-            self.predictor = self.build_eval_model()
+            self.predictor = self.build_eval_model(summary_writer=self.summary_writer)
 
     def build_dataloader(self):
         self.train_dataset = AMIDataset(self.hparams, type='train')
@@ -105,6 +107,7 @@ class Summarization(object):
                 self.model.module.load_state_dict(model_state_dict, strict=True)
             else:
                 self.model.load_state_dict(model_state_dict)
+
             self.optimizer.load_state_dict(optimizer_state_dict, strict=True)
             self.previous_model_path = self.hparams.load_pthpath
             print("Loaded model from {}".format(self.hparams.load_pthpath))
@@ -117,11 +120,11 @@ class Summarization(object):
             """
         )
 
-    def build_eval_model(self, model=None):
+    def build_eval_model(self, model=None, summary_writer=None):
         # Define predictor
         predictor = Predictor(self.hparams, model=model, vocab_word=self.vocab_word,
                                    vocab_role=self.vocab_role, vocab_pos=self.vocab_pos,
-                                   checkpoint=self.hparams.load_pthpath)
+                                   checkpoint=self.hparams.load_pthpath, summary_writer=summary_writer)
 
         return predictor
 
@@ -170,56 +173,18 @@ class Summarization(object):
 
             # torch.cuda.empty_cache()
 
-            if epoch % 10 == 0 and epoch >= 10:
+            if epoch % 5 == 0 and epoch >= 5:
                 print('======= Evaluation Start Epoch: ', epoch, ' ==================')
-                self.evaluate(epoch=epoch)
 
-                del self.predictor
 
-                model_state_dict, optimizer_state_dict = load_checkpoint(self.hparams.save_dirpath + 'checkpoint_' + str(epoch) + '.pth')
+                self.hparams = self.hparams._replace(
+                    load_pthpath=os.path.join(self.checkpoint_manager.ckpt_dirpath, "checkpoint_%d.pth" % (epoch)))
+                self.predictor_2 = self.build_eval_model(summary_writer=self.summary_writer)
 
-                print('============= Loading Trained Model from: ', (self.hparams.save_dirpath + 'checkpoint_' + str(epoch) + '.pth'), ' ==================')
-                if isinstance(self.model, nn.DataParallel):
-                    self.model.module.load_state_dict(model_state_dict)
-                else:
-                    self.model.load_state_dict(model_state_dict, strict=True)
+                compare_models(self.predictor.model, self.predictor_2.model)
+                self.predictor.evaluate(test_dataloader=self.test_dataloader, epoch=epoch)
+                self.predictor_2.evaluate(test_dataloader=self.test_dataloader, epoch=epoch)
 
-                self.predictor = self.build_eval_model(self.model)
 
-                self.evaluate(epoch=epoch)
 
                 print('============================================================\n\n')
-
-    def evaluate(self, epoch=None):
-        with torch.no_grad():
-            cand_list = []
-            ref_list = []
-            for batch_idx, batch in enumerate(tqdm(self.test_dataloader)):
-
-                data = batch
-                dialogues_ids = data['dialogues_ids'].to(self.device)
-                pos_ids = data['pos_ids'].to(self.device)
-                labels_ids = data['labels_ids'].to(self.device)  # [batch, tgt_seq_len]
-                src_masks = data['src_masks'].to(self.device)
-                role_ids = data['role_ids'].to(self.device)
-
-                reference_summaries = self.predictor.get_summaries(labels_ids[0])
-                reference_summaries = reference_summaries.replace('<BEGIN>', '').replace('<END>', '')
-
-                print('\n\n[정답_요약문]: ', reference_summaries)
-
-                generated_summaries = self.predictor.inference(inputs=dialogues_ids, src_masks=src_masks,
-                                                               role_ids=role_ids, pos_ids=pos_ids)
-
-                cand_list.append(generated_summaries)
-                ref_list.append(reference_summaries)
-                break
-
-            results_dict = compute_rouge_scores(cand_list, ref_list)
-            print('[ROUGE]: ', results_dict)
-
-
-            if epoch is not None:
-                self.summary_writer.add_scalar('test/rouge-F1', results_dict['rouge_1_f_score'], epoch)
-                self.summary_writer.add_scalar('test/rouge-F2', results_dict['rouge_2_f_score'], epoch)
-                self.summary_writer.add_scalar('test/rouge-FL', results_dict['rouge_l_f_score'], epoch)

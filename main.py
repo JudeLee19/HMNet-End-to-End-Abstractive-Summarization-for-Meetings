@@ -2,11 +2,11 @@ import argparse
 import os
 import logging
 import collections
-
+from datetime import datetime
 from config.hparams import *
 from train import Summarization
 import torch
-
+from torch.utils.tensorboard import SummaryWriter
 
 
 def init_logger(path):
@@ -50,14 +50,6 @@ def train_model(args):
     hparams = hparams._replace(use_role=args.use_role)
     hparams = hparams._replace(use_role=args.use_pos)
 
-    seed_value = 666
-    torch.manual_seed(seed_value)
-    torch.backends.cudnn.deterministic = True
-
-    if len(hparams.gpu_ids) > 0:
-        torch.cuda.set_device(hparams.gpu_ids[0])
-        torch.cuda.manual_seed(seed_value)
-
     print('hparams.save_dirpath: ', hparams.save_dirpath)
     summarization = Summarization(hparams, mode='train')
     summarization.train()
@@ -82,13 +74,15 @@ def evaluate_model(args):
     hparams = hparams._replace(use_role=args.use_pos)
 
     epoch = hparams.start_eval_epoch
+
     print('\n ========= [Evaluation Start Epoch: ', epoch, ']================== ')
     for i in range(int(epoch), 100):
         load_pthpath = '/'.join(model_path.split('/')[:-1]) + '/checkpoint_' + str(i) + '.pth'
         hparams= hparams._replace(load_pthpath=load_pthpath)
         print('hparams.load_pthpath: ', hparams.load_pthpath)
         summarization = Summarization(hparams, mode='eval')
-        summarization.evaluate(epoch=i)
+        summarization.predictor.evaluate(epoch=i,
+                                         test_dataloader=summarization.test_dataloader)
         del summarization
     print('\n')
 
