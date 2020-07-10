@@ -15,7 +15,6 @@ Implements the model described in the following paper [End-to-End Abstractive Su
 ```
 1. I used CNN in Transformer-PositionwiseFeedForward.
 2. Role vectors, pos tags, and named entity tags are not used. (When using a role vector, performance was lower than not utilizing role vector. So please do not hesitate to advise me about this.)
-
 ```
 
 ### Train
