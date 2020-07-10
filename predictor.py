@@ -10,7 +10,8 @@ from utils.utils import compute_rouge_scores
 
 
 class Predictor(object):
-    def __init__(self, hparams, model=None, vocab_word=None, vocab_role=None, vocab_pos=None, checkpoint=None, summary_writer=None):
+    def __init__(self, hparams, model=None, vocab_word=None, vocab_role=None,
+                 vocab_pos=None, checkpoint=None, summary_writer=None):
         super(Predictor, self).__init__()
         self.hparams = hparams
         self.model = model
@@ -44,8 +45,6 @@ class Predictor(object):
                 self.model.module.load_state_dict(model_state_dict)
             else:
                 self.model.load_state_dict(model_state_dict, strict=True)
-
-        self.model.eval()
 
     def build_model(self):
         # Define model
@@ -82,7 +81,16 @@ class Predictor(object):
         summary = ' '.join(tokens)
         return max_indices, summary
 
-    def evaluate(self, test_dataloader, epoch=None):
+    def evaluate(self, test_dataloader, epoch=None, eval_path=None):
+
+        # model_state_dict, optimizer_state_dict = load_checkpoint(eval_path)
+        #
+        # print('============= Loading Trained Model from: ', eval_path, ' ==================')
+        # if isinstance(self.model, nn.DataParallel):
+        #     self.model.module.load_state_dict(model_state_dict)
+        # else:
+        #     self.model.load_state_dict(model_state_dict, strict=True)
+
         with torch.no_grad():
             cand_list = []
             ref_list = []
@@ -103,7 +111,6 @@ class Predictor(object):
 
                 cand_list.append(generated_summaries)
                 ref_list.append(reference_summaries)
-                break
 
             results_dict = compute_rouge_scores(cand_list, ref_list)
             print('[ROUGE]: ', results_dict)
@@ -293,7 +300,7 @@ class Predictor(object):
         summary = self.get_summaries(preds)
         summary = summary.replace('<EOS>', '').replace('<END>', '')
 
-        print('[예측_요약문]: ', summary)
+        print('[Generated_Summaries]: ', summary)
         return summary
 
 

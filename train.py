@@ -120,11 +120,11 @@ class Summarization(object):
             """
         )
 
-    def build_eval_model(self, model=None, summary_writer=None):
+    def build_eval_model(self, model=None, summary_writer=None, eval_path=None):
         # Define predictor
         predictor = Predictor(self.hparams, model=model, vocab_word=self.vocab_word,
                                    vocab_role=self.vocab_role, vocab_pos=self.vocab_pos,
-                                   checkpoint=self.hparams.load_pthpath, summary_writer=summary_writer)
+                                   checkpoint=eval_path, summary_writer=summary_writer)
 
         return predictor
 
@@ -173,18 +173,10 @@ class Summarization(object):
 
             # torch.cuda.empty_cache()
 
-            if epoch % 5 == 0 and epoch >= 5:
+            if epoch % 10 == 0 and epoch >= self.hparams.start_eval_epoch:
                 print('======= Evaluation Start Epoch: ', epoch, ' ==================')
 
-
-                self.hparams = self.hparams._replace(
-                    load_pthpath=os.path.join(self.checkpoint_manager.ckpt_dirpath, "checkpoint_%d.pth" % (epoch)))
-                self.predictor_2 = self.build_eval_model(summary_writer=self.summary_writer)
-
-                compare_models(self.predictor.model, self.predictor_2.model)
-                self.predictor.evaluate(test_dataloader=self.test_dataloader, epoch=epoch)
-                self.predictor_2.evaluate(test_dataloader=self.test_dataloader, epoch=epoch)
-
-
+                self.predictor.evaluate(test_dataloader=self.test_dataloader, epoch=epoch,
+                                        eval_path=self.previous_model_path)
 
                 print('============================================================\n\n')

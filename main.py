@@ -82,7 +82,7 @@ def evaluate_model(args):
         print('hparams.load_pthpath: ', hparams.load_pthpath)
         summarization = Summarization(hparams, mode='eval')
         summarization.predictor.evaluate(epoch=i,
-                                         test_dataloader=summarization.test_dataloader)
+                                         test_dataloader=summarization.test_dataloader, eval_path=load_pthpath)
         del summarization
     print('\n')
 
