@@ -61,7 +61,7 @@ ipython==7.15.0
 ipython-genutils==0.2.0
 itsdangerous==1.1.0
 jedi==0.17.0
-Jinja2==2.11.2
+Jinja2==2.11.3
 jmespath==0.9.5
 joblib==0.15.1
 jsonpath-ng==1.5.1
