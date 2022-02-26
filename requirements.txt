@@ -77,7 +77,7 @@ Markdown==3.2.1
 MarkupSafe==1.1.1
 matplotlib==3.2.2
 mistune==0.8.4
-mlflow==1.8.0
+mlflow==1.23.1
 murmurhash==1.0.2
 nanotime==0.5.2
 nbconvert==5.6.1
